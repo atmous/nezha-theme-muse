@@ -66,6 +66,10 @@ function pct(used, total) {
   return Math.min(100, Math.max(0, (used / total) * 100));
 }
 function barClass(p) { return p >= 90 ? "hot" : p >= 75 ? "warn" : ""; }
+function cssVar(name, fallback) {
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name);
+  return (v && v.trim()) || fallback;
+}
 
 /* ---------- theme ---------- */
 function applyTheme(t) {
@@ -167,10 +171,26 @@ function pushPoint(arr, t, v) {
 }
 
 /* ---------- filters / sort ---------- */
+let currentSort = "name";
+let onlineOnly = false;
+document.querySelectorAll("#sortSeg button").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll("#sortSeg button").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    currentSort = btn.dataset.sort;
+    render();
+  });
+});
+$("#onlineOnly").addEventListener("click", () => {
+  onlineOnly = !onlineOnly;
+  $("#onlineOnly").setAttribute("aria-checked", String(onlineOnly));
+  render();
+});
+$("#searchInput").addEventListener("input", render);
+
 function visibleServers() {
   const q = ($("#searchInput").value || "").trim().toLowerCase();
-  const onlineOnly = $("#onlineOnly").checked;
-  const sort = $("#sortSelect").value;
+  const sort = currentSort;
   let arr = [...servers.values()];
   if (onlineOnly) arr = arr.filter((s) => s.online);
   if (q) arr = arr.filter((s) => (s.raw.name || "").toLowerCase().includes(q));
@@ -183,11 +203,6 @@ function visibleServers() {
   else arr.sort((a, b) => String(a.raw.name).localeCompare(String(b.raw.name)));
   return arr;
 }
-["searchInput", "sortSelect", "onlineOnly"].forEach((id) => {
-  $("#" + id).addEventListener("input", render);
-  $("#" + id).addEventListener("change", render);
-});
-
 /* ---------- render: list ---------- */
 function render() {
   const arr = visibleServers();
@@ -220,7 +235,7 @@ function cardHtml(s) {
   const platform = host.platform ? esc(host.platform) : "–";
   const arch = host.arch ? " · " + esc(host.arch) : "";
   const cpuModel = host.cpu && host.cpu[0] ? esc(host.cpu[0]) : "";
-  const up = s.online ? fmtUptime(st.uptime) : "离线 · 最后活跃 " + fmtTimeAgo(raw.last_active);
+  const up = s.online ? fmtUptime(st.uptime) : "离线";
   return `<article class="card${s.online ? "" : " offline"}" data-id="${raw.id}" tabindex="0" role="button" aria-label="${esc(raw.name)}">
     <div class="card-top">
       <span class="flag" aria-hidden="true">${flagEmoji(raw.country_code)}</span>
@@ -296,12 +311,12 @@ function renderDetail() {
     ["启动时间", host.boot_time ? new Date(host.boot_time * 1000).toLocaleString("zh-CN") : "–"],
     ["国家", raw.country_code ? raw.country_code.toUpperCase() : "–"],
   ];
-  $("#dInfo").innerHTML = cells.map(([k, v]) => `<div class="d-cell"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join("");
+  $("#dInfo").innerHTML = cells.map(([k, v]) => `<div class="d-row"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join("");
   $("#dCpuNow").textContent = st.cpu != null ? st.cpu.toFixed(1) + "%" : "–";
   $("#dMemNow").textContent = memP.toFixed(1) + "%";
   $("#dNetNow").textContent = "↑ " + fmtSpeed(s.outSpeed) + "  ↓ " + fmtSpeed(s.inSpeed);
-  drawChart($("#chartCpu"), s.hist.cpu, "#f59e0b", (v) => v.toFixed(1) + "%");
-  drawChart($("#chartMem"), s.hist.mem, "#34d399", (v) => v.toFixed(1) + "%");
+  drawChart($("#chartCpu"), s.hist.cpu, cssVar("--accent"), (v) => v.toFixed(1) + "%");
+  drawChart($("#chartMem"), s.hist.mem, cssVar("--green"), (v) => v.toFixed(1) + "%");
   drawDualChart($("#chartNet"), s.hist.netIn, s.hist.netOut);
 }
 
@@ -321,7 +336,7 @@ function loadHistory(id) {
         return;
       }
       $("#dHistNote").textContent = pts.length + " 个采样点";
-      drawChart($("#chartHist"), pts.map((p) => [p.ts, p.value]), "#f59e0b", (v) => v.toFixed(1) + "%");
+      drawChart($("#chartHist"), pts.map((p) => [p.ts, p.value]), cssVar("--accent", "#0071e3"), (v) => v.toFixed(1) + "%");
     })
     .catch(() => {
       if (detailId !== id) return;
@@ -341,9 +356,10 @@ function setupCanvas(c) {
 }
 function drawChart(c, pts, color, fmtVal) {
   const { ctx, w, h } = setupCanvas(c);
+  const gray = cssVar("--text-3", "#86868b");
   ctx.clearRect(0, 0, w, h);
   if (!pts || pts.length < 2) {
-    ctx.fillStyle = "#6b7280"; ctx.font = "12px sans-serif";
+    ctx.fillStyle = gray; ctx.font = "12px sans-serif";
     ctx.fillText(pts && pts.length === 1 ? "采集中…" : "暂无数据", 8, 20);
     return;
   }
@@ -354,7 +370,7 @@ function drawChart(c, pts, color, fmtVal) {
   const x = (i) => (i / (pts.length - 1)) * (w - 8) + 4;
   const y = (v) => h - 18 - ((v - min) / (max - min)) * (h - 30);
   // grid + labels
-  ctx.strokeStyle = "rgba(128,128,128,.18)"; ctx.fillStyle = "#6b7280"; ctx.font = "11px sans-serif";
+  ctx.strokeStyle = cssVar("--line", "rgba(128,128,128,.18)"); ctx.fillStyle = gray; ctx.font = "11px sans-serif";
   ctx.lineWidth = 1;
   [0, 0.5, 1].forEach((f) => {
     const yy = h - 18 - f * (h - 30);
@@ -372,16 +388,19 @@ function drawChart(c, pts, color, fmtVal) {
   // last value dot
   const lx = x(pts.length - 1), ly = y(pts[pts.length - 1][1]);
   ctx.beginPath(); ctx.arc(lx, ly, 3, 0, Math.PI * 2); ctx.fillStyle = color; ctx.fill();
-  ctx.fillStyle = "#6b7280";
+  ctx.fillStyle = gray;
   ctx.fillText(new Date(pts[0][0]).toLocaleTimeString("zh-CN", { hour12: false }), 4, h - 4);
   ctx.fillText(new Date(pts[pts.length - 1][0]).toLocaleTimeString("zh-CN", { hour12: false }), w - 52, h - 4);
 }
 function drawDualChart(c, downPts, upPts) {
   const { ctx, w, h } = setupCanvas(c);
+  const gray = cssVar("--text-3", "#86868b");
+  const blue = cssVar("--blue", "#0071e3");
+  const green = cssVar("--green", "#34c759");
   ctx.clearRect(0, 0, w, h);
   const all = [...downPts.map((p) => p[1]), ...upPts.map((p) => p[1])];
   if (!all.length || (downPts.length < 2 && upPts.length < 2)) {
-    ctx.fillStyle = "#6b7280"; ctx.font = "12px sans-serif";
+    ctx.fillStyle = gray; ctx.font = "12px sans-serif";
     ctx.fillText("采集中…", 8, 20);
     return;
   }
@@ -394,18 +413,18 @@ function drawDualChart(c, downPts, upPts) {
     pts.forEach((p, i) => { i === 0 ? ctx.moveTo(x(i, pts.length), y(p[1])) : ctx.lineTo(x(i, pts.length), y(p[1])); });
     ctx.strokeStyle = color; ctx.lineWidth = 1.8; ctx.stroke();
   };
-  ctx.strokeStyle = "rgba(128,128,128,.18)"; ctx.fillStyle = "#6b7280"; ctx.font = "11px sans-serif";
+  ctx.strokeStyle = cssVar("--line", "rgba(128,128,128,.18)"); ctx.fillStyle = gray; ctx.font = "11px sans-serif";
   [0, 0.5, 1].forEach((f) => {
     const yy = h - 18 - f * (h - 30);
     ctx.beginPath(); ctx.moveTo(4, yy); ctx.lineTo(w - 4, yy); ctx.stroke();
     ctx.fillText(fmtSpeed(max * f), 6, yy - 3);
   });
-  line(downPts, "#60a5fa");
-  line(upPts, "#34d399");
+  line(downPts, blue);
+  line(upPts, green);
   // legend at top-right, clear of the left-aligned axis labels
   ctx.font = "11px sans-serif";
-  ctx.fillStyle = "#34d399"; ctx.fillText("↑ 上传", w - 52, 12);
-  ctx.fillStyle = "#60a5fa"; ctx.fillText("↓ 下载", w - 108, 12);
+  ctx.fillStyle = green; ctx.fillText("↑ 上传", w - 52, 12);
+  ctx.fillStyle = blue; ctx.fillText("↓ 下载", w - 108, 12);
 }
 
 /* ---------- clock ---------- */
