@@ -30,14 +30,20 @@ dependencies, no build step. Live data over the public WebSocket
   table — one verdict line plus full-width server bands. It went too
   far: the verdict became a huge red headline, the bands were thin
   and sparse, the page was 80% empty aurora. User: "难看死了".
-- **v8 — Aurora, rich and luminous** (current): the synthesis.
-  Small calm status line (not a headline); a large hero chart with
-  per-server CPU lines, each server its own aurora colour (indigo /
-  teal / violet / pink) — comparable and useful, unlike the old
-  fleet-average chart; rich glass cards, one per server, each with
-  its own CPU chart and key numbers (MEM / disk / net up / net down /
-  1-min load), offline cards dimmed; full chart / info / 24h history
-  in the detail drawer. Rich + refined, not empty, not loud.
+- **v8 — Aurora, rich and luminous**: the synthesis. Small calm
+  status line; a large hero chart with per-server CPU lines, each
+  server its own aurora colour; rich glass cards, one per server,
+  each with its own CPU chart and key numbers, offline cards dimmed;
+  full chart / info / 24h history in the detail drawer. User: "难
+  看，推倒重来，换一个".
+- **v9 — Precision Instruments** (current): a complete restart.
+  Not a dashboard anymore — each server is a precision instrument,
+  a circular gauge like a luxury watch face or an aircraft
+  instrument: 270° sweep, 60 fine ticks, numerals at 0/25/50/75/100,
+  an amber arc, a needle, the value in light-weight numerals. Near-
+  black dial, warm white markings, one amber accent (like luminous
+  watch paint). Digital readouts below for MEM / disk / net / load.
+  Offline gauges show a dashed arc and "–". Detail drawer kept.
 
 ## Install (Nezha v2.6.1)
 
@@ -48,4 +54,4 @@ set `user_template: muse-dist` in `data/config.yaml`, restart.
 ## Files
 
 - `muse-dist/index.html`, `muse-dist/assets/style.css`, `muse-dist/assets/app.js`
-- `preview-v8-*.png` — screenshots of v8 (dark / light / detail / mobile)
+- `preview-v9-*.png` — screenshots of v9 (dark / light / detail / mobile)
