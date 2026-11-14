@@ -1,11 +1,11 @@
-/* Muse v5 — restraint, after Linear / Stripe / Vercel.
- * Patterns stolen from the references (not pixels):
- *  - Linear: near-monochrome, one accent, low-contrast borders, crisp type;
- *    everything non-essential absent; one level of detail at a time.
- *  - Stripe: tables are the product — right-aligned tabular numerals,
- *    muted gridlines, inline sparklines; one hero metric visualized,
- *    everything else numeric; chart is a summary, table is the truth.
- *  - Vercel: hierarchy from spacing and type weight; color = meaning only.
+/* Muse v6 — Aurora. Flowing light + glass.
+ * The idea: the page is a dark room with slow aurora light in it.
+ * Indigo / violet / teal fields drift behind frosted glass panels;
+ * data stays calm and monochrome, the aurora is the atmosphere.
+ * One gradient accent (indigo → violet → teal) for the hero number,
+ * the hero chart, and active states. Structure follows v5
+ * (Linear/Stripe/Vercel restraint: KPI strip, one hero chart, the
+ * server table, progressive-disclosure drawer).
  * Data layer (unchanged): WS /api/v1/ws/server (live, no auth),
  * GET /api/v1/setting, GET /api/v1/server/:id/metrics (24h, tsdb only).
  * Net speeds are computed here from transfer deltas. Offline =
@@ -332,7 +332,7 @@ setInterval(() => { if (servers.size) renderAll(); }, 400);
 
 function drawSpark(canvas, pts, online) {
   const { ctx, w, h } = setupCanvas(canvas);
-  const accent = cssVar("--accent", "#7c7cff");
+  const accent = cssVar("--accent", "#818cf8");
   ctx.clearRect(0, 0, w, h);
   if (!online || !pts || pts.length < 2) {
     ctx.strokeStyle = cssVar("--text-3", "#6b7280");
@@ -451,7 +451,7 @@ function setupCanvas(c) {
 }
 function drawArea(c, pts, fmtVal) {
   const { ctx, w, h } = setupCanvas(c);
-  const accent = cssVar("--accent", "#7c7cff");
+  const accent = cssVar("--accent", "#818cf8");
   const gray = cssVar("--text-3", "#6b7280");
   ctx.clearRect(0, 0, w, h);
   if (!pts || pts.length < 2) {
@@ -474,7 +474,8 @@ function drawArea(c, pts, fmtVal) {
     ctx.fillText(fmtVal(min + f * (max - min)), 4, yy - 4);
   });
   const grad = ctx.createLinearGradient(0, 0, 0, h);
-  grad.addColorStop(0, accent + "30"); grad.addColorStop(1, accent + "00");
+  const a1 = cssVar("--accent", "#818cf8"), a2 = cssVar("--accent-2", "#c084fc"), a3 = cssVar("--accent-3", "#2dd4bf");
+  grad.addColorStop(0, a1 + "38"); grad.addColorStop(.55, a2 + "16"); grad.addColorStop(1, a3 + "00");
   ctx.beginPath();
   pts.forEach((p, i) => { i === 0 ? ctx.moveTo(x(i), y(p[1])) : ctx.lineTo(x(i), y(p[1])); });
   ctx.strokeStyle = accent; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.lineCap = "round";
@@ -487,9 +488,9 @@ function drawArea(c, pts, fmtVal) {
 }
 function drawDualArea(c, downPts, upPts) {
   const { ctx, w, h } = setupCanvas(c);
-  const accent = cssVar("--accent", "#7c7cff");
-  const green = cssVar("--green", "#34d399");
-  const gray = cssVar("--text-3", "#6b7280");
+  const accent = cssVar("--accent", "#818cf8");
+  const teal = cssVar("--accent-3", "#2dd4bf");
+  const gray = cssVar("--text-3", "#71717a");
   ctx.clearRect(0, 0, w, h);
   const all = [...downPts.map((p) => p[1]), ...upPts.map((p) => p[1])];
   if (!all.length || (downPts.length < 2 && upPts.length < 2)) {
@@ -516,10 +517,10 @@ function drawDualArea(c, downPts, upPts) {
     ctx.fillText(fmtSpeed(max * f), 4, yy - 4);
   });
   line(downPts, accent);
-  line(upPts, green);
+  line(upPts, teal);
   ctx.font = "11px sans-serif";
   ctx.fillStyle = accent; ctx.fillText("— 下载", w - 92, 12);
-  ctx.fillStyle = green; ctx.fillText("— 上传", w - 44, 12);
+  ctx.fillStyle = teal; ctx.fillText("— 上传", w - 44, 12);
 }
 
 /* ---------- clocks ---------- */
