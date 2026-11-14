@@ -1,25 +1,31 @@
-/* Muse v7 — Aurora, rethought layout.
- * The diagnosis that drove v7:
- *   v1–v6 all kept the same skeleton (KPI strip + hero chart + table)
- *   and only changed the skin. The skeleton was the problem.
- *   - The KPI strip and the hero chart are fleet aggregates nobody
- *     acts on. With a small fleet they repeat what the servers say.
- *   - A table treats every server like a spreadsheet row: uniform,
- *     no hierarchy, no identity. The thing that needs you (offline,
- *     hot) looks the same as the thing that doesn't.
- *   - The page answered "what are the numbers?" before it answered
- *     "are we OK?".
- * The new skeleton:
- *   1. A verdict line — the 5-second answer, in one sentence.
- *   2. The servers ARE the page. Each one is a full-width band with
- *      its own sparkline and its key numbers — a list, not a table.
- *      Offline sorts first and is visibly distinct.
- *   3. Everything else (full chart, full info, 24h history) lives in
- *      the detail drawer, on demand.
+/* Muse v8 — Aurora, rich and luminous.
+ * What v7 got wrong (and what v8 fixes):
+ *   v7 removed too much. The verdict became a huge red headline that
+ *   dominated the page, the bands were thin and sparse, and the page
+ *   was 80% empty aurora — it looked like a wireframe, not a product.
+ *   The lesson from all 7 rounds: this user wants RICH + REFINED,
+ *   not empty (v3, v7), not loud (v4), not plain (v5, v6).
+ *   Richness has to come from per-server depth, because the fleet is
+ *   small — so each server gets a real card with its own chart, and
+ *   the hero chart shows per-server CPU lines (comparable, useful)
+ *   instead of a meaningless fleet average.
+ * The structure:
+ *   1. A small, calm status line (not a headline).
+ *   2. A large hero chart: per-server CPU over 10 min, each server
+ *      its own aurora colour (indigo / teal / violet / pink).
+ *   3. Rich glass cards, one per server, each with its own CPU chart
+ *      and its key numbers. Offline cards are dimmed.
+ *   4. Full chart / info / 24h history in the detail drawer.
  * Data layer (unchanged): WS /api/v1/ws/server (live, no auth),
  * GET /api/v1/setting, GET /api/v1/server/:id/metrics (24h, tsdb only).
  * Net speeds are computed here from transfer deltas. Offline =
  * last_active older than 30s (or the zero time).
+ * Field map (verified against the live WS payload):
+ *   server level: id, name, country_code, last_active
+ *   host: platform, cpu (array), mem_total, disk_total, swap_total, arch, boot_time
+ *   state: cpu, mem_used, swap_used, disk_used, net_in_transfer,
+ *   net_out_transfer, uptime, load_1/5/15, tcp_conn_count, udp_conn_count,
+ *   process_count
  */
 "use strict";
 const $ = (s, r) => (r || document).querySelector(s);
@@ -29,6 +35,13 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 function cssVar(name, fallback) { const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim(); return v || fallback; }
 
 const MAXH = 300, OFFLINE_MS = 30000;
+// one aurora colour per server, stable by server id order
+const PALETTE = ["#818cf8", "#2dd4bf", "#c084fc", "#f472b6", "#fbbf24", "#34d399", "#60a5fa", "#fb923c"];
+function serverColor(id) {
+  const ids = Array.from(servers.keys()).sort((a, b) => a - b);
+  const i = Math.max(0, ids.indexOf(id));
+  return PALETTE[i % PALETTE.length];
+}
 
 /* ---------------- theme ---------------- */
 function initTheme() {
@@ -45,14 +58,13 @@ $("#themeBtn").addEventListener("click", () => {
 initTheme();
 
 /* ---------------- state ---------------- */
-const servers = new Map(); // id -> {id, name, host, state, online, cpuHist[], memHist[], netUpHist[], netDownHist[], lastNetIn, lastNetOut, lastTs, netUp, netDown, updatedAt}
+const servers = new Map(); // id -> {id, name, host, state, online, cpuHist[], memHist[], netUpHist[], netDownHist[], lastNetIn, lastNetOut, lastTs, netUp, netDown, updatedAt, countryCode, lastActive}
 let siteName = "";
 let lastMsgAt = 0;
 let searchQ = "";
 let sortKey = "status";
 let selectedId = null;
 let detailMetric = "cpu";
-let chartRaf = null;
 
 const flagCache = {};
 function countryFlag(code) {
@@ -96,7 +108,6 @@ function fmtDateTime(d) {
   const p = (n) => String(n).padStart(2, "0");
   return d.getFullYear() + "/" + p(d.getMonth() + 1) + "/" + p(d.getDate()) + " " + fmtClock(d);
 }
-function pct(v) { return v == null || !isFinite(v) ? "–" : (v * 100).toFixed(1) + "%"; }
 function parseLastActive(v) {
   if (!v) return 0;
   const t = Date.parse(v);
@@ -133,15 +144,11 @@ function connectWS() {
       rec.host = s.host || {};
       rec.state = s.state || {};
       rec.countryCode = s.country_code || rec.host.country_code || "";
-      // last_active / country_code live at the SERVER level in the WS
-      // payload (host only carries platform/cpu/mem_total/disk_total/
-      // swap_total/arch/boot_time). Keep the host-level fallback.
       const la = parseLastActive(s.last_active || rec.host.last_active);
       rec.lastActive = la;
       rec.online = la > 0 && (now - la) < OFFLINE_MS && Object.keys(rec.state).length > 0;
       const st = rec.state;
       const cpu = typeof st.cpu === "number" ? st.cpu / 100 : null;
-      // mem_total / disk_total / swap_total live in host, not state
       const memTotal = rec.host.mem_total;
       const mem = (typeof st.mem_used === "number" && typeof memTotal === "number" && memTotal > 0)
         ? st.mem_used / memTotal : null;
@@ -172,11 +179,12 @@ fetch("/api/v1/setting").then((r) => r.json()).then((d) => {
   if (d && d.data && d.data.site_name) { siteName = d.data.site_name; $("#siteName").textContent = siteName; }
 }).catch(() => { /* keep default title */ });
 
-/* ---------------- verdict ---------------- */
-function renderVerdict() {
-  const line = $("#verdictLine"), sub = $("#verdictSub");
+/* ---------------- status line ---------------- */
+function renderStatus() {
+  const dot = $("#verdictDot"), line = $("#verdictLine"), sub = $("#verdictSub");
   const all = Array.from(servers.values());
   if (all.length === 0) {
+    dot.className = "v-dot warn";
     line.textContent = "正在连接…";
     sub.textContent = "–";
     return;
@@ -191,17 +199,19 @@ function renderVerdict() {
     return cpu >= 80 || mem >= 90;
   });
   if (offline.length > 0) {
-    const n = offline.length;
-    line.innerHTML = "<b class=\"bad\">" + n + " 台服务器离线</b>";
+    dot.className = "v-dot bad";
+    line.innerHTML = "<span class=\"bad\">" + offline.length + " 台服务器离线</span>";
   } else if (hot.length > 0) {
-    line.innerHTML = "<b>" + hot.length + " 台服务器负载较高</b>";
+    dot.className = "v-dot warn";
+    line.textContent = hot.length + " 台服务器负载较高";
   } else {
+    dot.className = "v-dot";
     line.innerHTML = "<span class=\"ok\">一切正常</span>";
   }
   const parts = [all.length + " 台服务器", online.length + " 台在线"];
   if (offline.length) parts.push(offline.length + " 台离线");
   if (hot.length) parts.push(hot.length + " 台负载高");
-  sub.textContent = parts.join(" · ") + " · " + fmtClock(new Date());
+  sub.textContent = parts.join(" · ");
   $("#listCount").textContent = "服务器 · " + all.length + " 台";
 }
 
@@ -220,77 +230,120 @@ function sortedServers() {
     if (sortKey === "cpu") return cpuOf(b) - cpuOf(a);
     if (sortKey === "mem") return memOf(b) - memOf(a);
     if (sortKey === "name") return (a.name || "").localeCompare(b.name || "");
-    // status: offline first, then CPU desc
     if (a.online !== b.online) return a.online ? 1 : -1;
     return cpuOf(b) - cpuOf(a);
   });
   return filtered;
 }
 
-/* ---------------- bands ---------------- */
-function metricHTML(cls, label, valueHTML, extra) {
-  return "<div class=\"b-metric " + cls + "\"><label>" + label + "</label><b>" + valueHTML + "</b>" + (extra || "") + "</div>";
+/* ---------------- hero chart : per-server CPU lines ---------------- */
+function renderHero() {
+  const online = Array.from(servers.values()).filter((s) => s.online && s.cpuHist.length >= 2);
+  const legend = $("#heroLegend");
+  legend.innerHTML = online.map((s) => "<span><i style=\"background:" + serverColor(s.id) + ";box-shadow:0 0 8px " + serverColor(s.id) + "55\"></i>" + esc(s.name) + "</span>").join("");
+  const c = $("#chartHero");
+  const { ctx, w, h } = setupCanvas(c);
+  const gray = cssVar("--text-3", "#71717a");
+  ctx.font = "11px sans-serif";
+  ctx.fillStyle = gray;
+  let max = 0;
+  for (const s of online) for (const p of s.cpuHist) max = Math.max(max, p[1]);
+  max = max > 0 ? Math.min(1, max * 1.2) : 1;
+  let t0 = Infinity, t1 = -Infinity;
+  for (const s of online) for (const p of s.cpuHist) { t0 = Math.min(t0, p[0]); t1 = Math.max(t1, p[0]); }
+  if (!isFinite(t0)) { t0 = Date.now() - 600000; t1 = Date.now(); }
+  const x = (t) => 34 + ((t - t0) / Math.max(1, t1 - t0)) * (w - 40);
+  const y = (v) => (h - 22) - (v / max) * (h - 34);
+  ctx.strokeStyle = cssVar("--line", "rgba(255,255,255,.09)");
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 2; i++) {
+    const yy = y(max * i / 2);
+    ctx.beginPath(); ctx.moveTo(34, yy); ctx.lineTo(w - 6, yy); ctx.stroke();
+    ctx.fillText(Math.round(max * i / 2 * 100) + "%", 0, yy + 4);
+  }
+  for (const s of online) {
+    const color = serverColor(s.id);
+    const pts = s.cpuHist;
+    const grad = ctx.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, color + "2e"); grad.addColorStop(1, color + "00");
+    ctx.beginPath();
+    pts.forEach((p, i) => { i === 0 ? ctx.moveTo(x(p[0]), y(p[1])) : ctx.lineTo(x(p[0]), y(p[1])); });
+    ctx.lineTo(x(pts[pts.length - 1][0]), h - 22); ctx.lineTo(x(pts[0][0]), h - 22); ctx.closePath();
+    ctx.fillStyle = grad; ctx.fill();
+    ctx.beginPath();
+    pts.forEach((p, i) => { i === 0 ? ctx.moveTo(x(p[0]), y(p[1])) : ctx.lineTo(x(p[0]), y(p[1])); });
+    ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.lineCap = "round";
+    ctx.stroke();
+  }
+  const d0 = new Date(t0), d1 = new Date(t1);
+  ctx.fillStyle = gray;
+  ctx.fillText(fmtClock(d0), 34, h - 6);
+  const t1s = fmtClock(d1);
+  ctx.fillText(t1s, w - 6 - ctx.measureText(t1s).width, h - 6);
 }
-function bandHTML(s) {
+
+/* ---------------- server cards ---------------- */
+function cardHTML(s) {
   const st = s.state || {};
   const host = s.host || {};
+  const color = serverColor(s.id);
   const cpu = s.online && typeof st.cpu === "number" ? st.cpu : null;
   const mem = (s.online && typeof st.mem_used === "number" && typeof host.mem_total === "number" && host.mem_total > 0)
     ? st.mem_used / host.mem_total * 100 : null;
   const disk = (s.online && typeof st.disk_used === "number" && typeof host.disk_total === "number" && host.disk_total > 0)
     ? st.disk_used / host.disk_total * 100 : null;
-  const uptime = s.online && typeof st.uptime === "number" ? fmtUptime(st.uptime) : "–";
   const subParts = [];
   const flag = countryFlag(s.countryCode || host.country_code);
   if (flag) subParts.push("<span class=\"flag\">" + flag + "</span>");
   if (host.platform) subParts.push(esc(host.platform));
   if (host.arch) subParts.push(esc(host.arch));
-  subParts.push(s.online ? "在线" : (s.lastActive ? "离线 · " + fmtAgo(s.lastActive) : "从未上线"));
-  const cpuCls = cpu != null && cpu >= 80 ? " class=\"hot\"" : "";
+  subParts.push(s.online ? "在线 · " + (typeof st.uptime === "number" ? fmtUptime(st.uptime) : "") : (s.lastActive ? "离线 · " + fmtAgo(s.lastActive) : "从未上线"));
   const memBar = mem != null
     ? "<span class=\"mini-bar\"><i class=\"" + (mem >= 90 ? "hot" : mem >= 80 ? "warn" : "") + "\" style=\"width:" + clamp(mem, 0, 100).toFixed(1) + "%\"></i></span>" : "";
-  return "<div class=\"b-id\"><span class=\"b-dot\"></span><div style=\"min-width:0\"><div class=\"b-name\">" + esc(s.name) + "</div><div class=\"b-sub\">" + subParts.join(" · ") + "</div></div></div>"
-    + "<canvas class=\"b-spark\" width=\"300\" height=\"76\"></canvas>"
-    + metricHTML("m-cpu", "CPU", cpu != null ? "<span" + cpuCls + ">" + cpu.toFixed(1) + "%</span>" : "–")
-    + metricHTML("m-mem", "内存", mem != null ? mem.toFixed(1) + "%" : "–", memBar)
-    + metricHTML("m-disk hide-lg", "磁盘", disk != null ? disk.toFixed(1) + "%" : "–")
-    + metricHTML("m-up hide-md", "上传", s.online ? fmtSpeed(s.netUp) : "–")
-    + metricHTML("m-down hide-lg", "下载", s.online ? fmtSpeed(s.netDown) : "–")
-    + metricHTML("m-uptime hide-sm", "运行时间", uptime);
+  return "<div class=\"card-head\"><span class=\"card-dot\"></span><div style=\"min-width:0\"><div class=\"card-name\">" + esc(s.name) + "</div><div class=\"card-sub\">" + subParts.join(" · ") + "</div></div>"
+    + "<div class=\"card-cpu\"><label>CPU</label><b class=\"" + (cpu != null && cpu >= 80 ? "hot" : "") + "\">" + (cpu != null ? cpu.toFixed(1) + "%" : "–") + "</b></div></div>"
+    + "<div class=\"card-chart\"><canvas class=\"card-spark\" width=\"600\" height=\"220\"></canvas></div>"
+    + "<div class=\"card-metrics\">"
+    + "<div class=\"m\"><label>内存</label><b class=\"" + (mem != null && mem >= 90 ? "hot" : "") + "\">" + (mem != null ? mem.toFixed(1) + "%" : "–") + "</b>" + memBar + "</div>"
+    + "<div class=\"m\"><label>磁盘</label><b>" + (disk != null ? disk.toFixed(1) + "%" : "–") + "</b></div>"
+    + "<div class=\"m\"><label>上传</label><b>" + (s.online ? fmtSpeed(s.netUp) : "–") + "</b></div>"
+    + "<div class=\"m\"><label>下载</label><b>" + (s.online ? fmtSpeed(s.netDown) : "–") + "</b></div>"
+    + "<div class=\"m\"><label>负载 1 分钟</label><b>" + (s.online && typeof st.load_1 === "number" ? st.load_1.toFixed(2) : "–") + "</b></div>"
+    + "</div>";
 }
-function renderBands() {
-  const list = $("#serverList");
+function renderCards() {
+  const grid = $("#serverGrid");
   const ordered = sortedServers();
   $("#emptyHint").hidden = ordered.length !== 0 || servers.size === 0;
   const seen = new Set();
   for (const s of ordered) {
     seen.add(s.id);
-    let el = list.querySelector("[data-id=\"" + s.id + "\"]");
+    let el = grid.querySelector("[data-id=\"" + s.id + "\"]");
     if (!el) {
       el = document.createElement("article");
-      el.className = "band";
+      el.className = "card";
       el.dataset.id = s.id;
       el.tabIndex = 0;
       el.setAttribute("role", "button");
       el.addEventListener("click", () => openDetail(s.id));
       el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openDetail(s.id); } });
-      list.appendChild(el);
+      grid.appendChild(el);
     }
     el.classList.toggle("offline", !s.online);
-    el.innerHTML = bandHTML(s);
-    const spark = el.querySelector(".b-spark");
-    if (spark) drawSpark(spark, s.cpuHist, s.online);
+    el.innerHTML = cardHTML(s);
+    const spark = el.querySelector(".card-spark");
+    if (spark) drawArea(spark, s.cpuHist, "pct", serverColor(s.id));
   }
-  $$(".band", list).forEach((el) => { if (!seen.has(Number(el.dataset.id))) el.remove(); });
-  // order DOM to match sort
+  $$(".card", grid).forEach((el) => { if (!seen.has(Number(el.dataset.id))) el.remove(); });
   for (const s of ordered) {
-    const el = list.querySelector("[data-id=\"" + s.id + "\"]");
-    if (el) list.appendChild(el);
+    const el = grid.querySelector("[data-id=\"" + s.id + "\"]");
+    if (el) grid.appendChild(el);
   }
 }
 function render() {
-  renderVerdict();
-  renderBands();
+  renderStatus();
+  renderHero();
+  renderCards();
 }
 
 /* ---------------- charts ---------------- */
@@ -305,33 +358,9 @@ function setupCanvas(c) {
   ctx.clearRect(0, 0, w, h);
   return { ctx, w, h };
 }
-function drawSpark(c, pts, online) {
+function drawArea(c, pts, unit, color) {
   const { ctx, w, h } = setupCanvas(c);
-  if (!online || !pts || pts.length < 2) {
-    ctx.strokeStyle = cssVar("--text-3", "#71717a");
-    ctx.setLineDash([3, 4]); ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.moveTo(0, h / 2); ctx.lineTo(w, h / 2); ctx.stroke();
-    ctx.setLineDash([]);
-    return;
-  }
-  const t0 = pts[0][0], t1 = pts[pts.length - 1][0] || t0 + 1;
-  const x = (t) => ((t - t0) / Math.max(1, t1 - t0)) * w;
-  const y = (v) => h - 3 - clamp(v, 0, 1) * (h - 6);
-  const grad = ctx.createLinearGradient(0, 0, 0, h);
-  const a1 = cssVar("--accent", "#818cf8"), a2 = cssVar("--accent-2", "#c084fc");
-  grad.addColorStop(0, a1 + "30"); grad.addColorStop(1, a2 + "00");
-  ctx.beginPath();
-  pts.forEach((p, i) => { i === 0 ? ctx.moveTo(x(p[0]), y(p[1])) : ctx.lineTo(x(p[0]), y(p[1])); });
-  ctx.lineTo(x(pts[pts.length - 1][0]), h); ctx.lineTo(x(pts[0][0]), h); ctx.closePath();
-  ctx.fillStyle = grad; ctx.fill();
-  ctx.beginPath();
-  pts.forEach((p, i) => { i === 0 ? ctx.moveTo(x(p[0]), y(p[1])) : ctx.lineTo(x(p[0]), y(p[1])); });
-  ctx.strokeStyle = a1; ctx.lineWidth = 1.8; ctx.lineJoin = "round"; ctx.lineCap = "round";
-  ctx.stroke();
-}
-function drawArea(c, pts, unit) {
-  const { ctx, w, h } = setupCanvas(c);
-  const accent = cssVar("--accent", "#818cf8");
+  const accent = color || cssVar("--accent", "#818cf8");
   const gray = cssVar("--text-3", "#71717a");
   ctx.font = "11px sans-serif";
   ctx.fillStyle = gray;
@@ -350,8 +379,7 @@ function drawArea(c, pts, unit) {
   }
   if (pts.length >= 2) {
     const grad = ctx.createLinearGradient(0, 0, 0, h);
-    const a1 = cssVar("--accent", "#818cf8"), a2 = cssVar("--accent-2", "#c084fc"), a3 = cssVar("--accent-3", "#2dd4bf");
-    grad.addColorStop(0, a1 + "38"); grad.addColorStop(.55, a2 + "16"); grad.addColorStop(1, a3 + "00");
+    grad.addColorStop(0, accent + "38"); grad.addColorStop(1, accent + "00");
     ctx.beginPath();
     pts.forEach((p, i) => { i === 0 ? ctx.moveTo(x(p[0]), y(p[1])) : ctx.lineTo(x(p[0]), y(p[1])); });
     ctx.lineTo(x(pts[pts.length - 1][0]), h - 22); ctx.lineTo(x(pts[0][0]), h - 22); ctx.closePath();
@@ -365,6 +393,11 @@ function drawArea(c, pts, unit) {
     ctx.fillText(fmtClock(d0), 34, h - 6);
     const t1s = fmtClock(d1);
     ctx.fillText(t1s, w - 6 - ctx.measureText(t1s).width, h - 6);
+  } else {
+    ctx.strokeStyle = gray;
+    ctx.setLineDash([3, 4]); ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(34, h / 2); ctx.lineTo(w - 6, h / 2); ctx.stroke();
+    ctx.setLineDash([]);
   }
 }
 function drawDualArea(c, downPts, upPts) {
@@ -420,7 +453,6 @@ function closeDetail() {
   $("#detail").classList.remove("open");
   $("#detail").setAttribute("aria-hidden", "true");
   $("#detailBackdrop").hidden = true;
-  if (chartRaf) { cancelAnimationFrame(chartRaf); chartRaf = null; }
 }
 $("#detailClose").addEventListener("click", closeDetail);
 $("#detailBackdrop").addEventListener("click", closeDetail);
@@ -474,8 +506,9 @@ function refreshDetail() {
   if (host.boot_time) rows.push(["启动时间", fmtDateTime(new Date(host.boot_time * 1000))]);
   $("#dInfo").innerHTML = rows.map((r) => "<div class=\"d-row\"><span>" + r[0] + "</span><b>" + r[1] + "</b></div>").join("");
   const cap = $("#chartCap");
-  if (detailMetric === "cpu") { drawArea($("#chartMain"), s.cpuHist, "pct"); cap.textContent = "实时曲线 · 最近 10 分钟 · CPU 使用率"; }
-  else if (detailMetric === "mem") { drawArea($("#chartMain"), s.memHist, "pct"); cap.textContent = "实时曲线 · 最近 10 分钟 · 内存占用率"; }
+  const color = serverColor(s.id);
+  if (detailMetric === "cpu") { drawArea($("#chartMain"), s.cpuHist, "pct", color); cap.textContent = "实时曲线 · 最近 10 分钟 · CPU 使用率"; }
+  else if (detailMetric === "mem") { drawArea($("#chartMain"), s.memHist, "pct", color); cap.textContent = "实时曲线 · 最近 10 分钟 · 内存占用率"; }
   else { drawDualArea($("#chartMain"), s.netDownHist, s.netUpHist); cap.textContent = "实时曲线 · 最近 10 分钟 · 网络速率"; }
 }
 async function loadHistory(id) {
@@ -494,7 +527,7 @@ async function loadHistory(id) {
     }
     note.textContent = "· " + pts.length + " 个点";
     const series = pts.map((p) => [p.timestamp * 1000, (p.cpu || 0) / 100]);
-    drawArea($("#chartHist"), series, "pct");
+    drawArea($("#chartHist"), series, "pct", serverColor(id));
   } catch (e) {
     empty.hidden = false;
     note.textContent = "";
@@ -502,8 +535,8 @@ async function loadHistory(id) {
 }
 
 /* ---------------- search / sort / clock ---------------- */
-$("#searchInput").addEventListener("input", (e) => { searchQ = e.target.value; renderBands(); });
-$("#sortSelect").addEventListener("change", (e) => { sortKey = e.target.value; renderBands(); });
+$("#searchInput").addEventListener("input", (e) => { searchQ = e.target.value; renderCards(); });
+$("#sortSelect").addEventListener("change", (e) => { sortKey = e.target.value; renderCards(); });
 document.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
     e.preventDefault();
@@ -512,9 +545,11 @@ document.addEventListener("keydown", (e) => {
 });
 setInterval(() => {
   const now = new Date();
+  $("#clock").textContent = fmtClock(now);
   $("#footClock").textContent = fmtDateTime(now);
-  if (servers.size) renderVerdict();
+  if (servers.size) renderStatus();
 }, 1000);
+$("#clock").textContent = fmtClock(new Date());
 $("#footClock").textContent = fmtDateTime(new Date());
 
 connectWS();
