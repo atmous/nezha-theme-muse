@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Muse · Nezha</title>
+<meta name="description" content="Muse — a fresh frontend theme for Nezha Monitoring.">
+<meta name="theme-color" content="#0b0d10" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f6f5f2" media="(prefers-color-scheme: light)">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23f59e0b'/%3E%3Ctext x='16' y='23' font-size='20' text-anchor='middle' fill='%230b0d10'%3E%E2%9C%A6%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="./assets/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true">✦</span>
+    <div class="brand-text">
+      <h1 id="siteName">Muse</h1>
+      <p id="siteSub">Nezha Monitoring</p>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <span id="connDot" class="conn" title="与面板的连接状态"><i></i><em id="connText">连接中…</em></span>
+    <label class="search">
+      <span aria-hidden="true">⌕</span>
+      <input id="searchInput" type="search" placeholder="搜索服务器…" autocomplete="off" spellcheck="false">
+    </label>
+    <select id="sortSelect" aria-label="排序方式">
+      <option value="name">按名称</option>
+      <option value="cpu">按 CPU ↓</option>
+      <option value="mem">按内存 ↓</option>
+      <option value="net">按网速 ↓</option>
+    </select>
+    <label class="toggle-online" title="只显示在线服务器">
+      <input id="onlineOnly" type="checkbox"> 仅在线
+    </label>
+    <button id="themeBtn" class="icon-btn" type="button" aria-label="切换深色 / 浅色">◐</button>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="stats" id="statsBar" aria-label="总览">
+    <div class="stat"><b id="statOnline">–</b><span>在线 / 总数</span></div>
+    <div class="stat"><b id="statCpu">–</b><span>平均 CPU</span></div>
+    <div class="stat"><b id="statMem">–</b><span>平均内存</span></div>
+    <div class="stat"><b id="statNet">–</b><span>实时总流量</span></div>
+    <div class="stat"><b id="statUpdated">–</b><span>上次更新</span></div>
+  </section>
+
+  <p id="emptyHint" class="hint" hidden>没有匹配的服务器。</p>
+  <p id="errorHint" class="hint error" hidden></p>
+
+  <section class="grid" id="serverGrid" aria-live="polite"></section>
+
+  <footer class="foot">
+    <span id="footNote">Muse theme · 数据来自本面板 WebSocket，每 2 秒刷新</span>
+    <span id="footClock"></span>
+  </footer>
+</main>
+
+<aside id="detail" class="detail" aria-hidden="true" role="dialog" aria-label="服务器详情">
+  <div class="detail-head">
+    <div>
+      <h2 id="dName">–</h2>
+      <p id="dSub">–</p>
+    </div>
+    <button id="detailClose" class="icon-btn" type="button" aria-label="关闭详情">✕</button>
+  </div>
+  <div class="detail-body">
+    <div class="d-grid" id="dInfo"></div>
+    <div class="d-charts">
+      <div class="chart-box">
+        <h3>CPU <span id="dCpuNow"></span></h3>
+        <canvas id="chartCpu" width="640" height="140"></canvas>
+      </div>
+      <div class="chart-box">
+        <h3>内存 <span id="dMemNow"></span></h3>
+        <canvas id="chartMem" width="640" height="140"></canvas>
+      </div>
+      <div class="chart-box">
+        <h3>网络 <span id="dNetNow"></span></h3>
+        <canvas id="chartNet" width="640" height="140"></canvas>
+      </div>
+    </div>
+    <div class="d-history">
+      <h3>24 小时 CPU 历史 <span id="dHistNote"></span></h3>
+      <canvas id="chartHist" width="640" height="140"></canvas>
+      <p id="dHistEmpty" class="hint" hidden>面板未开启历史存储（tsdb），暂无 24 小时数据；上方为实时曲线。</p>
+    </div>
+  </div>
+</aside>
+<div id="detailBackdrop" class="backdrop" hidden></div>
+
+<script src="./assets/app.js"></script>
+</body>
+</html>
