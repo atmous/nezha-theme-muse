@@ -4,30 +4,25 @@ A brand-new, dependency-free user frontend for Nezha Dashboard v2.
 Pure static SPA (one `index.html` + CSS + JS), no build step, no CDN,
 no framework. Drop it in and it works.
 
-## v3 — if Apple made this product
+## v4 — sci-fi HUD (current)
 
-v3 is not a reskin. It rethinks the product the way Apple would:
+v4 is the opposite of v3's minimalism: a dark, glowing, data-dense
+mission-control console.
 
-- **One calm statement, not a dashboard.** The page opens with a single
-  sentence — "一切正常" or "1 台服务器离线" — in huge, light type. If
-  everything is fine, the product says so and gets out of the way.
-- **A list, not cards.** Servers are rows with hairline dividers, like
-  iOS Settings. No boxes, no shadows, no stats strip. Each row carries
-  exactly one number — CPU — plus a tiny sparkline.
-- **Color is information only.** Almost entirely monochrome (black /
-  white / gray). Green appears only for "healthy", red only when
-  something needs attention. The chart line is a single ink color.
-- **One focused view at a time.** Tapping a server opens a sheet with
-  one huge number and one chart; a segmented control switches the metric
-  (CPU / 内存 / 网络) instead of showing three charts at once.
-- **Motion is part of the feel.** Numbers ease toward their live value
-  instead of jumping; rows and the sheet move on a spring curve.
-- **Needs attention first.** Offline servers sort to the top
-  automatically — the product decides the order, not the user.
-  Search is a single Spotlight-style field (⌘K to focus).
+- **Deep blue-black + neon cyan**, monospace everywhere, faint grid
+  background, a slow scanline sweeping the page.
+- **Status strip** up top: SYS.STATUS / ONLINE / AVG CPU / AVG MEM /
+  NET TOTAL / ALERTS / UPDATED — everything at a glance.
+- **Server panels with corner brackets** (targeting-reticle frames),
+  a huge glowing CPU number, a live glowing strip chart, CPU/MEM/DISK
+  bars, and an 8-cell readout grid (MEM, NET ↑/↓, LOAD, UPTIME, PROCS,
+  TCP/UDP, SWAP). Offline panels go red with "SIGNAL LOST".
+- **Full-screen detail console**: four big glowing readouts, three live
+  charts (CPU / MEM / NET), a 12-cell info grid, 24h history.
+- **Live clock** with seconds, LINK status with blinking dot, search.
+- Numbers ease toward their live value; panels and the overlay animate in.
 
-v2 (Apple-flavored styling on a conventional dashboard) is kept in git
-history; v3 replaces it.
+v3 (Apple-minimal) and v2 (Apple-flavored dashboard) remain in git history.
 
 ## How it works
 
@@ -61,9 +56,9 @@ directory does not work; only built-in names like `user-dist` do that.)
 
 ## Screenshots
 
-- `preview-v3-light.png` / `preview-v3-dark.png` — list
-- `preview-v3-detail-light.png` / `preview-v3-detail-dark.png` — detail sheet
-- `preview-v3-mobile.png` — phone (bottom sheet)
+- `preview-v4-dark.png` / `preview-v4-light.png` — HUD dashboard
+- `preview-v4-detail-dark.png` — full-screen detail console
+- `preview-v4-mobile.png` — phone
 
 ## License
 
