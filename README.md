@@ -4,25 +4,34 @@ A brand-new, dependency-free user frontend for Nezha Dashboard v2.
 Pure static SPA (one `index.html` + CSS + JS), no build step, no CDN,
 no framework. Drop it in and it works.
 
-## v4 — sci-fi HUD (current)
+## v5 — restraint, after Linear / Stripe / Vercel (current)
 
-v4 is the opposite of v3's minimalism: a dark, glowing, data-dense
-mission-control console.
+v5 is research-grounded, not a guess. The references (a 2026 roundup of
+the best SaaS dashboards) converge on one answer for "premium":
 
-- **Deep blue-black + neon cyan**, monospace everywhere, faint grid
-  background, a slow scanline sweeping the page.
-- **Status strip** up top: SYS.STATUS / ONLINE / AVG CPU / AVG MEM /
-  NET TOTAL / ALERTS / UPDATED — everything at a glance.
-- **Server panels with corner brackets** (targeting-reticle frames),
-  a huge glowing CPU number, a live glowing strip chart, CPU/MEM/DISK
-  bars, and an 8-cell readout grid (MEM, NET ↑/↓, LOAD, UPTIME, PROCS,
-  TCP/UDP, SWAP). Offline panels go red with "SIGNAL LOST".
-- **Full-screen detail console**: four big glowing readouts, three live
-  charts (CPU / MEM / NET), a 12-cell info grid, 24h history.
-- **Live clock** with seconds, LINK status with blinking dot, search.
-- Numbers ease toward their live value; panels and the overlay animate in.
+- **Linear** — radical restraint: near-monochrome surfaces, one accent,
+  low-contrast borders, crisp type; everything non-essential absent.
+- **Stripe** — tables are the product: right-aligned tabular numerals,
+  muted gridlines, inline sparklines; one hero metric visualized,
+  everything else numeric; the chart is a summary, the table is the truth.
+- **Vercel** — hierarchy from spacing and type weight; color = meaning only.
 
-v3 (Apple-minimal) and v2 (Apple-flavored dashboard) remain in git history.
+Applied to Nezha:
+
+- **True-grey base** (`#0b0d10`, not pure black), layered elevation by
+  background lightness, hairline borders, **one refined indigo accent**,
+  muted semantic colors. No glow, no neon, no decoration competing
+  with the data.
+- **KPI strip**: one primary metric (online servers, largest type),
+  four quiet secondaries.
+- **One hero chart**: fleet-average CPU as a single indigo area chart.
+- **The server table**: sortable columns (click a header), right-aligned
+  tabular numerals, status pills, inline sparklines in the CPU column,
+  mini-bars for memory/disk. Click a row for the detail drawer.
+- **Progressive disclosure**: detail drawer shows four KPIs, one chart
+  (segmented CPU / 内存 / 网络), an info list, and 24h history.
+
+v4 (sci-fi HUD), v3 (Apple-minimal) and v2 remain in git history.
 
 ## How it works
 
@@ -56,9 +65,9 @@ directory does not work; only built-in names like `user-dist` do that.)
 
 ## Screenshots
 
-- `preview-v4-dark.png` / `preview-v4-light.png` — HUD dashboard
-- `preview-v4-detail-dark.png` — full-screen detail console
-- `preview-v4-mobile.png` — phone
+- `preview-v5-dark.png` / `preview-v5-light.png` — dashboard
+- `preview-v5-detail-dark.png` — detail drawer
+- `preview-v5-mobile.png` — phone
 
 ## License
 
