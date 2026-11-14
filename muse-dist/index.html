@@ -4,13 +4,19 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Muse · Nezha</title>
-<meta name="description" content="Muse — a refined monitoring frontend for Nezha, in the spirit of Linear, Stripe and Vercel.">
-<meta name="theme-color" content="#0b0d10" media="(prefers-color-scheme: dark)">
-<meta name="theme-color" content="#f9fafb" media="(prefers-color-scheme: light)">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%237c7cff'/%3E%3Ccircle cx='16' cy='16' r='6' fill='white'/%3E%3C/svg%3E">
+<meta name="description" content="Muse — an aurora glass frontend for Nezha Monitoring.">
+<meta name="theme-color" content="#070810" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f4f5f7" media="(prefers-color-scheme: light)">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23818cf8'/%3E%3Cstop offset='.5' stop-color='%23c084fc'/%3E%3Cstop offset='1' stop-color='%232dd4bf'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='8' fill='url(%23g)'/%3E%3Ccircle cx='16' cy='16' r='6' fill='white'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="./assets/style.css">
 </head>
 <body>
+<div class="aurora" aria-hidden="true">
+  <span class="orb orb-1"></span>
+  <span class="orb orb-2"></span>
+  <span class="orb orb-3"></span>
+  <span class="orb orb-4"></span>
+</div>
 <header class="topbar">
   <div class="brand"><span class="brand-mark" aria-hidden="true"></span><h1 id="siteName">Muse</h1><span class="brand-sub">Nezha</span></div>
   <div class="topbar-right">
@@ -72,7 +78,7 @@
   </section>
 
   <footer class="foot">
-    <span>Muse · Linear / Stripe / Vercel 式克制设计</span>
+    <span>Muse · Aurora — 流动光晕与玻璃质感</span>
     <span id="footClock"></span>
   </footer>
 </main>
