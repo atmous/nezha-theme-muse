@@ -1,21 +1,19 @@
-/* Muse v8 — Aurora, rich and luminous.
- * What v7 got wrong (and what v8 fixes):
- *   v7 removed too much. The verdict became a huge red headline that
- *   dominated the page, the bands were thin and sparse, and the page
- *   was 80% empty aurora — it looked like a wireframe, not a product.
- *   The lesson from all 7 rounds: this user wants RICH + REFINED,
- *   not empty (v3, v7), not loud (v4), not plain (v5, v6).
- *   Richness has to come from per-server depth, because the fleet is
- *   small — so each server gets a real card with its own chart, and
- *   the hero chart shows per-server CPU lines (comparable, useful)
- *   instead of a meaningless fleet average.
- * The structure:
- *   1. A small, calm status line (not a headline).
- *   2. A large hero chart: per-server CPU over 10 min, each server
- *      its own aurora colour (indigo / teal / violet / pink).
- *   3. Rich glass cards, one per server, each with its own CPU chart
- *      and its key numbers. Offline cards are dimmed.
- *   4. Full chart / info / 24h history in the detail drawer.
+/* Muse v9 — Precision Instruments. A complete restart.
+ * v1–v8 were all "dashboards" (lists, tables, cards, charts) and the
+ * user rejected every one: too empty, too loud, too plain, too ugly.
+ * v9 is a different object entirely: each server is a precision
+ * instrument — a circular gauge like a luxury watch face or an
+ * aircraft instrument — with fine ticks, a sweeping arc, a needle,
+ * and the value in elegant numerals. Monitoring IS instruments;
+ * this makes the metaphor literal. The craft is in the dial.
+ * Palette: near-black dial, warm white markings, one amber accent
+ * (like luminous watch paint). No aurora, no neon, no glass.
+ * Structure:
+ *   1. A small, calm status line.
+ *   2. Instrument panels, one per server: a large CPU gauge (270°
+ *      sweep, ticks, arc, needle), the server name and status, and
+ *      precise digital readouts for MEM / disk / net / load / uptime.
+ *   3. Full chart / info / 24h history in the detail drawer.
  * Data layer (unchanged): WS /api/v1/ws/server (live, no auth),
  * GET /api/v1/setting, GET /api/v1/server/:id/metrics (24h, tsdb only).
  * Net speeds are computed here from transfer deltas. Offline =
@@ -35,13 +33,6 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 function cssVar(name, fallback) { const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim(); return v || fallback; }
 
 const MAXH = 300, OFFLINE_MS = 30000;
-// one aurora colour per server, stable by server id order
-const PALETTE = ["#818cf8", "#2dd4bf", "#c084fc", "#f472b6", "#fbbf24", "#34d399", "#60a5fa", "#fb923c"];
-function serverColor(id) {
-  const ids = Array.from(servers.keys()).sort((a, b) => a - b);
-  const i = Math.max(0, ids.indexOf(id));
-  return PALETTE[i % PALETTE.length];
-}
 
 /* ---------------- theme ---------------- */
 function initTheme() {
@@ -212,7 +203,7 @@ function renderStatus() {
   if (offline.length) parts.push(offline.length + " 台离线");
   if (hot.length) parts.push(hot.length + " 台负载高");
   sub.textContent = parts.join(" · ");
-  $("#listCount").textContent = "服务器 · " + all.length + " 台";
+  $("#listCount").textContent = "仪器 · " + all.length + " 台";
 }
 
 /* ---------------- sorting ---------------- */
@@ -236,57 +227,105 @@ function sortedServers() {
   return filtered;
 }
 
-/* ---------------- hero chart : per-server CPU lines ---------------- */
-function renderHero() {
-  const online = Array.from(servers.values()).filter((s) => s.online && s.cpuHist.length >= 2);
-  const legend = $("#heroLegend");
-  legend.innerHTML = online.map((s) => "<span><i style=\"background:" + serverColor(s.id) + ";box-shadow:0 0 8px " + serverColor(s.id) + "55\"></i>" + esc(s.name) + "</span>").join("");
-  const c = $("#chartHero");
-  const { ctx, w, h } = setupCanvas(c);
-  const gray = cssVar("--text-3", "#71717a");
-  ctx.font = "11px sans-serif";
-  ctx.fillStyle = gray;
-  let max = 0;
-  for (const s of online) for (const p of s.cpuHist) max = Math.max(max, p[1]);
-  max = max > 0 ? Math.min(1, max * 1.2) : 1;
-  let t0 = Infinity, t1 = -Infinity;
-  for (const s of online) for (const p of s.cpuHist) { t0 = Math.min(t0, p[0]); t1 = Math.max(t1, p[0]); }
-  if (!isFinite(t0)) { t0 = Date.now() - 600000; t1 = Date.now(); }
-  const x = (t) => 34 + ((t - t0) / Math.max(1, t1 - t0)) * (w - 40);
-  const y = (v) => (h - 22) - (v / max) * (h - 34);
-  ctx.strokeStyle = cssVar("--line", "rgba(255,255,255,.09)");
-  ctx.lineWidth = 1;
-  for (let i = 0; i <= 2; i++) {
-    const yy = y(max * i / 2);
-    ctx.beginPath(); ctx.moveTo(34, yy); ctx.lineTo(w - 6, yy); ctx.stroke();
-    ctx.fillText(Math.round(max * i / 2 * 100) + "%", 0, yy + 4);
+/* ---------------- the gauge ---------------- */
+function setupCanvas(c) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = c.clientWidth, h = c.clientHeight;
+  if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) {
+    c.width = Math.round(w * dpr); c.height = Math.round(h * dpr);
   }
-  for (const s of online) {
-    const color = serverColor(s.id);
-    const pts = s.cpuHist;
-    const grad = ctx.createLinearGradient(0, 0, 0, h);
-    grad.addColorStop(0, color + "2e"); grad.addColorStop(1, color + "00");
+  const ctx = c.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  return { ctx, w, h };
+}
+const GAUGE_START = 135, GAUGE_SWEEP = 270; // degrees; 0 = east, clockwise (canvas)
+function gaugeAngle(value) { // value 0..100 -> degrees
+  return (GAUGE_START + clamp(value, 0, 100) / 100 * GAUGE_SWEEP) * Math.PI / 180;
+}
+function drawGauge(c, value) {
+  // value: 0..100, or null (offline / no data)
+  const { ctx, w, h } = setupCanvas(c);
+  const cx = w / 2, cy = h / 2;
+  const R = Math.min(w, h) / 2 - 6;
+  const accent = cssVar("--accent", "#f59e0b");
+  const red = cssVar("--red", "#f87171");
+  const tickMinor = cssVar("--text-3", "#71717a");
+  const tickMajor = cssVar("--text-2", "#a1a1aa");
+  const track = cssVar("--line-strong", "rgba(255,255,255,.16)");
+  const isHot = value != null && value >= 80;
+  const arcColor = isHot ? red : accent;
+  const pt = (ang, r) => [cx + Math.cos(ang) * r, cy + Math.sin(ang) * r];
+  // outer hairline ring
+  ctx.beginPath();
+  ctx.arc(cx, cy, R, 0, Math.PI * 2);
+  ctx.strokeStyle = track; ctx.lineWidth = 1; ctx.stroke();
+  // ticks: 60 minor, major every 15 (0/25/50/75/100)
+  for (let i = 0; i <= 60; i++) {
+    const ang = (GAUGE_START + i / 60 * GAUGE_SWEEP) * Math.PI / 180;
+    const major = i % 15 === 0;
+    const r1 = major ? R - 22 : R - 14;
+    const r2 = R - 6;
+    const [x1, y1] = pt(ang, r1), [x2, y2] = pt(ang, r2);
     ctx.beginPath();
-    pts.forEach((p, i) => { i === 0 ? ctx.moveTo(x(p[0]), y(p[1])) : ctx.lineTo(x(p[0]), y(p[1])); });
-    ctx.lineTo(x(pts[pts.length - 1][0]), h - 22); ctx.lineTo(x(pts[0][0]), h - 22); ctx.closePath();
-    ctx.fillStyle = grad; ctx.fill();
-    ctx.beginPath();
-    pts.forEach((p, i) => { i === 0 ? ctx.moveTo(x(p[0]), y(p[1])) : ctx.lineTo(x(p[0]), y(p[1])); });
-    ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.lineCap = "round";
+    ctx.moveTo(x1, y1); ctx.lineTo(x2, y2);
+    ctx.strokeStyle = major ? tickMajor : tickMinor;
+    ctx.lineWidth = major ? 2 : 1;
     ctx.stroke();
   }
-  const d0 = new Date(t0), d1 = new Date(t1);
-  ctx.fillStyle = gray;
-  ctx.fillText(fmtClock(d0), 34, h - 6);
-  const t1s = fmtClock(d1);
-  ctx.fillText(t1s, w - 6 - ctx.measureText(t1s).width, h - 6);
+  // numerals at 0 / 25 / 50 / 75 / 100
+  ctx.font = "600 12px " + getComputedStyle(document.body).fontFamily;
+  ctx.fillStyle = tickMajor;
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  [0, 25, 50, 75, 100].forEach((v) => {
+    const ang = (GAUGE_START + v / 100 * GAUGE_SWEEP) * Math.PI / 180;
+    const [x, y] = pt(ang, R - 38);
+    ctx.fillText(String(v), x, y);
+  });
+  // track arc (the full 270 degree scale)
+  const arcR = R - 30;
+  ctx.beginPath();
+  ctx.arc(cx, cy, arcR, GAUGE_START * Math.PI / 180, (GAUGE_START + GAUGE_SWEEP) * Math.PI / 180);
+  ctx.strokeStyle = track; ctx.lineWidth = 5; ctx.lineCap = "round"; ctx.stroke();
+  if (value != null) {
+    // value arc
+    ctx.beginPath();
+    ctx.arc(cx, cy, arcR, GAUGE_START * Math.PI / 180, gaugeAngle(value));
+    ctx.strokeStyle = arcColor; ctx.lineWidth = 5; ctx.lineCap = "round";
+    ctx.shadowColor = arcColor; ctx.shadowBlur = 10;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    // needle
+    const a = gaugeAngle(value);
+    const [nx, ny] = pt(a, arcR - 12);
+    const [tx, ty] = pt(a + Math.PI, 10);
+    ctx.beginPath();
+    ctx.moveTo(tx, ty); ctx.lineTo(nx, ny);
+    ctx.strokeStyle = arcColor; ctx.lineWidth = 2.5; ctx.lineCap = "round";
+    ctx.stroke();
+    // hub
+    ctx.beginPath();
+    ctx.arc(cx, cy, 7, 0, Math.PI * 2);
+    ctx.fillStyle = cssVar("--panel", "#131316");
+    ctx.fill();
+    ctx.strokeStyle = arcColor; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(cx, cy, 2, 0, Math.PI * 2);
+    ctx.fillStyle = arcColor; ctx.fill();
+  } else {
+    // offline: dashed arc at zero, no needle
+    ctx.beginPath();
+    ctx.arc(cx, cy, arcR, GAUGE_START * Math.PI / 180, (GAUGE_START + GAUGE_SWEEP) * Math.PI / 180);
+    ctx.setLineDash([2, 6]);
+    ctx.strokeStyle = tickMinor; ctx.lineWidth = 2; ctx.stroke();
+    ctx.setLineDash([]);
+  }
 }
 
-/* ---------------- server cards ---------------- */
-function cardHTML(s) {
+/* ---------------- instrument panels ---------------- */
+function instrumentHTML(s) {
   const st = s.state || {};
   const host = s.host || {};
-  const color = serverColor(s.id);
   const cpu = s.online && typeof st.cpu === "number" ? st.cpu : null;
   const mem = (s.online && typeof st.mem_used === "number" && typeof host.mem_total === "number" && host.mem_total > 0)
     ? st.mem_used / host.mem_total * 100 : null;
@@ -300,10 +339,11 @@ function cardHTML(s) {
   subParts.push(s.online ? "在线 · " + (typeof st.uptime === "number" ? fmtUptime(st.uptime) : "") : (s.lastActive ? "离线 · " + fmtAgo(s.lastActive) : "从未上线"));
   const memBar = mem != null
     ? "<span class=\"mini-bar\"><i class=\"" + (mem >= 90 ? "hot" : mem >= 80 ? "warn" : "") + "\" style=\"width:" + clamp(mem, 0, 100).toFixed(1) + "%\"></i></span>" : "";
-  return "<div class=\"card-head\"><span class=\"card-dot\"></span><div style=\"min-width:0\"><div class=\"card-name\">" + esc(s.name) + "</div><div class=\"card-sub\">" + subParts.join(" · ") + "</div></div>"
-    + "<div class=\"card-cpu\"><label>CPU</label><b class=\"" + (cpu != null && cpu >= 80 ? "hot" : "") + "\">" + (cpu != null ? cpu.toFixed(1) + "%" : "–") + "</b></div></div>"
-    + "<div class=\"card-chart\"><canvas class=\"card-spark\" width=\"600\" height=\"220\"></canvas></div>"
-    + "<div class=\"card-metrics\">"
+  return "<div class=\"inst-head\"><span class=\"inst-dot\"></span><div style=\"min-width:0\"><div class=\"inst-name\">" + esc(s.name) + "</div><div class=\"inst-sub\">" + subParts.join(" · ") + "</div></div>"
+    + "<span class=\"inst-id\">ID " + s.id + "</span></div>"
+    + "<div class=\"gauge-wrap\"><canvas class=\"gauge\" width=\"560\" height=\"560\"></canvas>"
+    + "<div class=\"gauge-readout\"><b class=\"" + (cpu != null && cpu >= 80 ? "hot" : "") + "\">" + (cpu != null ? cpu.toFixed(1) + "%" : "–") + "</b><span>CPU</span></div></div>"
+    + "<div class=\"inst-metrics\">"
     + "<div class=\"m\"><label>内存</label><b class=\"" + (mem != null && mem >= 90 ? "hot" : "") + "\">" + (mem != null ? mem.toFixed(1) + "%" : "–") + "</b>" + memBar + "</div>"
     + "<div class=\"m\"><label>磁盘</label><b>" + (disk != null ? disk.toFixed(1) + "%" : "–") + "</b></div>"
     + "<div class=\"m\"><label>上传</label><b>" + (s.online ? fmtSpeed(s.netUp) : "–") + "</b></div>"
@@ -311,7 +351,7 @@ function cardHTML(s) {
     + "<div class=\"m\"><label>负载 1 分钟</label><b>" + (s.online && typeof st.load_1 === "number" ? st.load_1.toFixed(2) : "–") + "</b></div>"
     + "</div>";
 }
-function renderCards() {
+function renderInstruments() {
   const grid = $("#serverGrid");
   const ordered = sortedServers();
   $("#emptyHint").hidden = ordered.length !== 0 || servers.size === 0;
@@ -321,7 +361,7 @@ function renderCards() {
     let el = grid.querySelector("[data-id=\"" + s.id + "\"]");
     if (!el) {
       el = document.createElement("article");
-      el.className = "card";
+      el.className = "instrument";
       el.dataset.id = s.id;
       el.tabIndex = 0;
       el.setAttribute("role", "button");
@@ -330,11 +370,14 @@ function renderCards() {
       grid.appendChild(el);
     }
     el.classList.toggle("offline", !s.online);
-    el.innerHTML = cardHTML(s);
-    const spark = el.querySelector(".card-spark");
-    if (spark) drawArea(spark, s.cpuHist, "pct", serverColor(s.id));
+    el.innerHTML = instrumentHTML(s);
+    const g = el.querySelector(".gauge");
+    if (g) {
+      const st = s.state || {};
+      drawGauge(g, s.online && typeof st.cpu === "number" ? st.cpu : null);
+    }
   }
-  $$(".card", grid).forEach((el) => { if (!seen.has(Number(el.dataset.id))) el.remove(); });
+  $$(".instrument", grid).forEach((el) => { if (!seen.has(Number(el.dataset.id))) el.remove(); });
   for (const s of ordered) {
     const el = grid.querySelector("[data-id=\"" + s.id + "\"]");
     if (el) grid.appendChild(el);
@@ -342,25 +385,13 @@ function renderCards() {
 }
 function render() {
   renderStatus();
-  renderHero();
-  renderCards();
+  renderInstruments();
 }
 
-/* ---------------- charts ---------------- */
-function setupCanvas(c) {
-  const dpr = window.devicePixelRatio || 1;
-  const w = c.clientWidth, h = c.clientHeight;
-  if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) {
-    c.width = Math.round(w * dpr); c.height = Math.round(h * dpr);
-  }
-  const ctx = c.getContext("2d");
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, w, h);
-  return { ctx, w, h };
-}
+/* ---------------- charts (detail drawer) ---------------- */
 function drawArea(c, pts, unit, color) {
   const { ctx, w, h } = setupCanvas(c);
-  const accent = color || cssVar("--accent", "#818cf8");
+  const accent = color || cssVar("--accent", "#f59e0b");
   const gray = cssVar("--text-3", "#71717a");
   ctx.font = "11px sans-serif";
   ctx.fillStyle = gray;
@@ -370,7 +401,7 @@ function drawArea(c, pts, unit, color) {
   const t0 = pts.length ? pts[0][0] : 0, t1 = pts.length ? pts[pts.length - 1][0] : 1;
   const x = (t) => 34 + ((t - t0) / Math.max(1, t1 - t0)) * (w - 40);
   const y = (v) => (h - 22) - (v / max) * (h - 34);
-  ctx.strokeStyle = cssVar("--line", "rgba(255,255,255,.09)");
+  ctx.strokeStyle = cssVar("--line", "rgba(255,255,255,.08)");
   ctx.lineWidth = 1;
   for (let i = 0; i <= 2; i++) {
     const yy = y(max * i / 2);
@@ -393,17 +424,12 @@ function drawArea(c, pts, unit, color) {
     ctx.fillText(fmtClock(d0), 34, h - 6);
     const t1s = fmtClock(d1);
     ctx.fillText(t1s, w - 6 - ctx.measureText(t1s).width, h - 6);
-  } else {
-    ctx.strokeStyle = gray;
-    ctx.setLineDash([3, 4]); ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.moveTo(34, h / 2); ctx.lineTo(w - 6, h / 2); ctx.stroke();
-    ctx.setLineDash([]);
   }
 }
 function drawDualArea(c, downPts, upPts) {
   const { ctx, w, h } = setupCanvas(c);
-  const accent = cssVar("--accent", "#818cf8");
-  const teal = cssVar("--accent-3", "#2dd4bf");
+  const accent = cssVar("--accent", "#f59e0b");
+  const green = cssVar("--green", "#34d399");
   const gray = cssVar("--text-3", "#71717a");
   let max = 0;
   for (const p of downPts) max = Math.max(max, p[1]);
@@ -416,7 +442,7 @@ function drawDualArea(c, downPts, upPts) {
   const y = (v) => (h - 22) - (v / max) * (h - 34);
   ctx.font = "11px sans-serif";
   ctx.fillStyle = gray;
-  ctx.strokeStyle = cssVar("--line", "rgba(255,255,255,.09)");
+  ctx.strokeStyle = cssVar("--line", "rgba(255,255,255,.08)");
   ctx.lineWidth = 1;
   for (let i = 0; i <= 2; i++) {
     const yy = y(max * i / 2);
@@ -431,10 +457,10 @@ function drawDualArea(c, downPts, upPts) {
     ctx.stroke();
   }
   line(downPts, accent);
-  line(upPts, teal);
+  line(upPts, green);
   ctx.font = "11px sans-serif";
   ctx.fillStyle = accent; ctx.fillText("— 下载", w - 92, 12);
-  ctx.fillStyle = teal; ctx.fillText("— 上传", w - 44, 12);
+  ctx.fillStyle = green; ctx.fillText("— 上传", w - 44, 12);
 }
 
 /* ---------------- detail drawer ---------------- */
@@ -506,9 +532,9 @@ function refreshDetail() {
   if (host.boot_time) rows.push(["启动时间", fmtDateTime(new Date(host.boot_time * 1000))]);
   $("#dInfo").innerHTML = rows.map((r) => "<div class=\"d-row\"><span>" + r[0] + "</span><b>" + r[1] + "</b></div>").join("");
   const cap = $("#chartCap");
-  const color = serverColor(s.id);
-  if (detailMetric === "cpu") { drawArea($("#chartMain"), s.cpuHist, "pct", color); cap.textContent = "实时曲线 · 最近 10 分钟 · CPU 使用率"; }
-  else if (detailMetric === "mem") { drawArea($("#chartMain"), s.memHist, "pct", color); cap.textContent = "实时曲线 · 最近 10 分钟 · 内存占用率"; }
+  const accent = cssVar("--accent", "#f59e0b");
+  if (detailMetric === "cpu") { drawArea($("#chartMain"), s.cpuHist, "pct", accent); cap.textContent = "实时曲线 · 最近 10 分钟 · CPU 使用率"; }
+  else if (detailMetric === "mem") { drawArea($("#chartMain"), s.memHist, "pct", accent); cap.textContent = "实时曲线 · 最近 10 分钟 · 内存占用率"; }
   else { drawDualArea($("#chartMain"), s.netDownHist, s.netUpHist); cap.textContent = "实时曲线 · 最近 10 分钟 · 网络速率"; }
 }
 async function loadHistory(id) {
@@ -527,7 +553,7 @@ async function loadHistory(id) {
     }
     note.textContent = "· " + pts.length + " 个点";
     const series = pts.map((p) => [p.timestamp * 1000, (p.cpu || 0) / 100]);
-    drawArea($("#chartHist"), series, "pct", serverColor(id));
+    drawArea($("#chartHist"), series, "pct", cssVar("--accent", "#f59e0b"));
   } catch (e) {
     empty.hidden = false;
     note.textContent = "";
@@ -535,8 +561,8 @@ async function loadHistory(id) {
 }
 
 /* ---------------- search / sort / clock ---------------- */
-$("#searchInput").addEventListener("input", (e) => { searchQ = e.target.value; renderCards(); });
-$("#sortSelect").addEventListener("change", (e) => { sortKey = e.target.value; renderCards(); });
+$("#searchInput").addEventListener("input", (e) => { searchQ = e.target.value; renderInstruments(); });
+$("#sortSelect").addEventListener("change", (e) => { sortKey = e.target.value; renderInstruments(); });
 document.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
     e.preventDefault();
