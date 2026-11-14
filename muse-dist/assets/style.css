@@ -1,23 +1,23 @@
-/* Muse v7 — Aurora, rethought layout.
- * The diagnosis that drove v7:
- *   v1–v6 all kept the same skeleton (KPI strip + hero chart + table)
- *   and only changed the skin. The skeleton was the problem.
- *   - The KPI strip and the hero chart are fleet aggregates nobody
- *     acts on. With a small fleet they repeat what the servers say.
- *   - A table treats every server like a spreadsheet row: uniform,
- *     no hierarchy, no identity. The thing that needs you (offline,
- *     hot) looks the same as the thing that doesn't.
- *   - The page answered "what are the numbers?" before it answered
- *     "are we OK?".
- * The new skeleton:
- *   1. A verdict line — the 5-second answer, in one sentence.
- *   2. The servers ARE the page. Each one is a full-width band with
- *      its own sparkline and its key numbers — a list, not a table.
- *      Offline sorts first and is visibly distinct.
- *   3. Everything else (full chart, full info, 24h history) lives in
- *      the detail drawer, on demand.
- * The aurora + glass atmosphere from v6 is kept; the layout is what
- * changed. */
+/* Muse v8 — Aurora, rich and luminous.
+ * What v7 got wrong (and what v8 fixes):
+ *   v7 removed too much. The verdict became a huge red headline that
+ *   dominated the page, the bands were thin and sparse, and the page
+ *   was 80% empty aurora — it looked like a wireframe, not a product.
+ *   The lesson from all 7 rounds: this user wants RICH + REFINED,
+ *   not empty (v3, v7), not loud (v4), not plain (v5, v6).
+ *   Richness has to come from per-server depth, because the fleet is
+ *   small — so each server gets a real card with its own chart, and
+ *   the hero chart shows per-server CPU lines (comparable, useful)
+ *   instead of a meaningless fleet average.
+ * The structure:
+ *   1. A small, calm status line (not a headline).
+ *   2. A large hero chart: per-server CPU over 10 min, each server
+ *      its own aurora colour (indigo / teal / violet / pink).
+ *   3. Rich glass cards, one per server, each with its own CPU chart
+ *      and its key numbers. Offline cards are dimmed.
+ *   4. Full chart / info / 24h history in the detail drawer.
+ * Aurora + glass atmosphere is kept and made more present: the chart
+ * colours ARE the aurora palette, the glass lets the light through. */
 :root {
   --bg: #070810;
   --glass: rgba(255, 255, 255, .045);
@@ -30,6 +30,7 @@
   --accent: #818cf8;
   --accent-2: #c084fc;
   --accent-3: #2dd4bf;
+  --accent-4: #f472b6;
   --accent-grad: linear-gradient(135deg, #818cf8, #c084fc 55%, #2dd4bf);
   --accent-soft: rgba(129, 140, 248, .13);
   --green: #34d399;
@@ -53,6 +54,7 @@ html[data-theme="light"] {
   --accent: #6366f1;
   --accent-2: #a855f7;
   --accent-3: #0d9488;
+  --accent-4: #db2777;
   --accent-grad: linear-gradient(135deg, #6366f1, #a855f7 55%, #0d9488);
   --accent-soft: rgba(99, 102, 241, .10);
   --green: #059669;
@@ -173,24 +175,42 @@ html[data-theme="light"] .orb-4 { background: radial-gradient(circle, rgba(251, 
 .hint { color: var(--text-2); font-size: 13px; }
 .hint.error { color: var(--red); }
 
-/* ---------- verdict : the 5-second answer ---------- */
-.verdict { margin: 8px 0 30px; }
-.verdict h2 {
-  margin: 0; font-size: 30px; font-weight: 350; letter-spacing: -.03em; line-height: 1.2;
-}
-.verdict h2 b { font-weight: 650; }
-.verdict h2 .ok {
+/* ---------- status line : small and calm, not a headline ---------- */
+.status-line { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; margin: 4px 0 20px; }
+.v-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); box-shadow: 0 0 10px rgba(52, 211, 153, .8); align-self: center; flex: none; }
+.v-dot.bad { background: var(--red); box-shadow: none; }
+.v-dot.warn { background: var(--amber); box-shadow: none; }
+.status-line h2 { margin: 0; font-size: 16px; font-weight: 620; letter-spacing: -.01em; }
+.status-line h2 .bad { color: var(--red); }
+.status-line h2 .ok {
   background: var(--accent-grad);
   -webkit-background-clip: text; background-clip: text;
   -webkit-text-fill-color: transparent; color: transparent;
 }
-.verdict h2 .bad { color: var(--red); }
-.verdict p { margin: 8px 0 0; font-size: 13.5px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.v-sub { font-size: 13px; color: var(--text-2); }
+.v-clock { margin-left: auto; font-size: 13px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+
+/* ---------- hero chart : per-server CPU lines ---------- */
+.hero {
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  backdrop-filter: blur(20px) saturate(150%);
+  border: 1px solid var(--line); border-radius: 16px;
+  box-shadow: var(--shadow);
+  padding: 18px 20px 8px; margin-bottom: 22px;
+}
+.hero-head { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 6px; }
+.hero-head h3 { margin: 0; font-size: 13.5px; font-weight: 650; letter-spacing: -.01em; }
+.hero-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--text-2); }
+.hero-legend span { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.hero-legend i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.hero-cap { margin-left: auto; font-size: 12px; color: var(--text-3); }
+.hero canvas { width: 100%; height: 210px; display: block; }
 
 /* ---------- list head + sort ---------- */
 .list-head {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding-bottom: 10px; border-bottom: 1px solid var(--line);
+  margin-bottom: 14px;
   font-size: 12px; color: var(--text-3);
 }
 .list-head .sort { display: inline-flex; align-items: center; gap: 6px; }
@@ -202,42 +222,47 @@ html[data-theme="light"] .orb-4 { background: radial-gradient(circle, rgba(251, 
 }
 .list-head select:focus { border-color: var(--accent); }
 
-/* ---------- server bands : the servers ARE the page ---------- */
-.server-list { border-bottom: 1px solid var(--line); }
-.band {
-  display: grid;
-  grid-template-columns: minmax(200px, 1.15fr) 150px repeat(6, auto);
-  align-items: center; gap: 8px 22px;
-  padding: 20px 6px;
-  border-bottom: 1px solid var(--line);
+/* ---------- server cards : each one a mini-dashboard ---------- */
+.server-grid {
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px;
+}
+.card {
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  backdrop-filter: blur(20px) saturate(150%);
+  border: 1px solid var(--line); border-radius: 16px;
+  box-shadow: var(--shadow);
+  padding: 18px 20px 16px;
   cursor: pointer;
-  transition: background .15s ease;
+  transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease;
 }
-.server-list .band:last-child { border-bottom: 0; }
-.band:hover { background: var(--hover); border-radius: 12px; }
-.band:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.band.offline { opacity: .58; }
-.band.offline:hover { opacity: 1; }
-.b-id { display: flex; align-items: center; gap: 11px; min-width: 0; }
-.b-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--green); box-shadow: 0 0 10px rgba(52, 211, 153, .8); flex: none; }
-.band.offline .b-dot { background: var(--red); box-shadow: none; }
-.b-name { font-size: 15.5px; font-weight: 600; letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.b-sub { font-size: 12.5px; color: var(--text-2); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.b-sub .flag { margin-right: 4px; }
-.b-spark { width: 150px; height: 38px; display: block; }
-.b-metric { text-align: right; }
-.b-metric label { display: block; font-size: 10.5px; font-weight: 550; letter-spacing: .07em; text-transform: uppercase; color: var(--text-3); margin-bottom: 2px; }
-.b-metric b { font-size: 15px; font-weight: 620; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.b-metric b.hot { color: var(--red); }
-.b-metric b.ac {
-  background: var(--accent-grad);
-  -webkit-background-clip: text; background-clip: text;
-  -webkit-text-fill-color: transparent; color: transparent;
+.card:hover { transform: translateY(-2px); border-color: var(--line-strong); }
+.card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.card.offline { opacity: .6; }
+.card.offline:hover { opacity: 1; }
+.card-head { display: flex; align-items: flex-start; gap: 10px; }
+.card-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--green); box-shadow: 0 0 10px rgba(52, 211, 153, .8); flex: none; margin-top: 6px; }
+.card.offline .card-dot { background: var(--red); box-shadow: none; }
+.card-name { font-size: 16px; font-weight: 650; letter-spacing: -.01em; }
+.card-sub { font-size: 12.5px; color: var(--text-2); margin-top: 2px; }
+.card-sub .flag { margin-right: 4px; }
+.card-cpu { margin-left: auto; text-align: right; flex: none; }
+.card-cpu label { display: block; font-size: 10.5px; font-weight: 550; letter-spacing: .07em; text-transform: uppercase; color: var(--text-3); }
+.card-cpu b { font-size: 22px; font-weight: 650; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.card-cpu b.hot { color: var(--red); }
+.card-chart { margin-top: 12px; }
+.card-chart canvas { width: 100%; height: 110px; display: block; }
+.card-metrics {
+  display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px;
+  margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line);
 }
-.b-metric .mini-bar { display: block; width: 100%; height: 3px; border-radius: 99px; background: var(--line-strong); overflow: hidden; margin-top: 5px; }
-.b-metric .mini-bar i { display: block; height: 100%; border-radius: 99px; background: var(--accent-grad); }
-.b-metric .mini-bar i.warn { background: var(--amber); }
-.b-metric .mini-bar i.hot { background: var(--red); }
+.card-metrics .m label { display: block; font-size: 10.5px; font-weight: 550; letter-spacing: .06em; text-transform: uppercase; color: var(--text-3); margin-bottom: 2px; }
+.card-metrics .m b { font-size: 14px; font-weight: 620; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.card-metrics .m b.hot { color: var(--red); }
+.card-metrics .m .mini-bar { display: block; height: 3px; border-radius: 99px; background: var(--line-strong); overflow: hidden; margin-top: 5px; }
+.card-metrics .m .mini-bar i { display: block; height: 100%; border-radius: 99px; background: var(--accent-grad); }
+.card-metrics .m .mini-bar i.warn { background: var(--amber); }
+.card-metrics .m .mini-bar i.hot { background: var(--red); }
 
 .foot { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 28px; font-size: 12px; color: var(--text-3); }
 
@@ -295,27 +320,19 @@ html[data-theme="light"] .orb-4 { background: radial-gradient(circle, rgba(251, 
 .d-history h3 span { color: var(--text-2); font-weight: 500; font-size: 12px; margin-left: 6px; }
 .d-history canvas { width: 100%; height: 110px; display: block; }
 
-@media (max-width: 1020px) {
-  .band { grid-template-columns: minmax(180px, 1fr) 120px repeat(4, auto); }
-  .b-spark { width: 120px; }
-  .hide-lg { display: none; }
-}
-@media (max-width: 760px) {
-  .band { grid-template-columns: 1fr auto auto; grid-template-areas: "id cpu mem" "id spark uptime"; row-gap: 6px; }
-  .b-id { grid-area: id; }
-  .b-spark { grid-area: spark; width: 120px; height: 30px; }
-  .hide-md { display: none; }
-  .verdict h2 { font-size: 24px; }
+@media (max-width: 900px) {
+  .server-grid { grid-template-columns: 1fr; }
+  .hero canvas { height: 180px; }
 }
 @media (max-width: 640px) {
   .topbar { padding: 10px 16px; gap: 10px; }
   .wrap { padding: 20px 16px 36px; }
   .search { min-width: 0; flex: 1; }
   .search kbd { display: none; }
-  .band { padding: 16px 4px; }
-  .b-spark { display: none; }
-  .hide-sm { display: none; }
-  .band { grid-template-columns: 1fr auto auto; grid-template-areas: "id cpu mem"; }
+  .v-clock { display: none; }
+  .hero canvas { height: 160px; }
+  .card-chart canvas { height: 96px; }
+  .card-metrics { grid-template-columns: repeat(3, 1fr); row-gap: 12px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .orb { animation: none; }
