@@ -24,14 +24,20 @@ dependencies, no build step. Live data over the public WebSocket
   data stays calm and monochrome, the aurora is the atmosphere. One
   gradient accent (indigo → violet → teal) for the hero number, the
   hero chart and active states. Structure follows v5.
-- **v7 — Aurora, rethought layout** (current): the diagnosis was
-  that v1–v6 only re-skinned the same skeleton (KPI strip + hero
-  chart + table). v7 drops the skeleton: no KPI strip, no hero
-  chart, no table. One verdict line ("1 台服务器离线" / "一切正
-  常") answers in 5 seconds; the servers ARE the page — each one a
-  full-width band with its own sparkline and key numbers, offline
-  first and visibly distinct; full chart / info / 24h history live
-  in the detail drawer on demand. Aurora + glass atmosphere kept.
+- **v7 — Aurora, rethought layout**: the diagnosis was that
+  v1–v6 only re-skinned the same skeleton (KPI strip + hero chart +
+  table). v7 dropped the skeleton: no KPI strip, no hero chart, no
+  table — one verdict line plus full-width server bands. It went too
+  far: the verdict became a huge red headline, the bands were thin
+  and sparse, the page was 80% empty aurora. User: "难看死了".
+- **v8 — Aurora, rich and luminous** (current): the synthesis.
+  Small calm status line (not a headline); a large hero chart with
+  per-server CPU lines, each server its own aurora colour (indigo /
+  teal / violet / pink) — comparable and useful, unlike the old
+  fleet-average chart; rich glass cards, one per server, each with
+  its own CPU chart and key numbers (MEM / disk / net up / net down /
+  1-min load), offline cards dimmed; full chart / info / 24h history
+  in the detail drawer. Rich + refined, not empty, not loud.
 
 ## Install (Nezha v2.6.1)
 
@@ -42,4 +48,4 @@ set `user_template: muse-dist` in `data/config.yaml`, restart.
 ## Files
 
 - `muse-dist/index.html`, `muse-dist/assets/style.css`, `muse-dist/assets/app.js`
-- `preview-v7-*.png` — screenshots of v7 (dark / light / detail / mobile)
+- `preview-v8-*.png` — screenshots of v8 (dark / light / detail / mobile)
