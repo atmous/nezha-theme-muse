@@ -31,51 +31,28 @@
 </header>
 
 <main class="wrap">
-  <section class="page-head">
-    <div>
-      <h2>服务器</h2>
-      <p id="pageSub">正在连接…</p>
-    </div>
-    <p class="live-clock" id="clock">--:--:--</p>
+  <section class="verdict" aria-label="系统状态">
+    <h2 id="verdictLine">正在连接…</h2>
+    <p id="verdictSub">–</p>
   </section>
 
-  <section class="kpis" aria-label="关键指标">
-    <div class="kpi primary"><label>在线服务器</label><b id="kpiOnline">–</b><span id="kpiOnlineSub">–</span></div>
-    <div class="kpi"><label>平均 CPU</label><b id="kpiCpu">–</b><span id="kpiCpuSub">在线服务器</span></div>
-    <div class="kpi"><label>平均内存</label><b id="kpiMem">–</b><span id="kpiMemSub">在线服务器</span></div>
-    <div class="kpi"><label>总流量</label><b id="kpiNet">–</b><span id="kpiNetSub">实时上下行之和</span></div>
-    <div class="kpi"><label>告警</label><b id="kpiAlerts">–</b><span id="kpiAlertsSub">离线服务器</span></div>
-  </section>
-
-  <section class="hero-chart" aria-label="舰队 CPU 趋势">
-    <div class="hero-chart-head">
-      <h3>舰队 CPU <span id="heroCpuNow"></span></h3>
-      <span class="hero-chart-cap">实时 · 最近 10 分钟</span>
-    </div>
-    <canvas id="chartFleet" width="1200" height="220"></canvas>
-  </section>
+  <div class="list-head">
+    <span id="listCount">服务器</span>
+    <label class="sort">
+      <span>排序</span>
+      <select id="sortSelect" aria-label="排序方式">
+        <option value="status">状态优先</option>
+        <option value="cpu">CPU 高到低</option>
+        <option value="mem">内存 高到低</option>
+        <option value="name">名称 A–Z</option>
+      </select>
+    </label>
+  </div>
 
   <p id="emptyHint" class="hint" hidden>没有匹配的服务器。</p>
   <p id="errorHint" class="hint error" hidden></p>
 
-  <section class="table-wrap">
-    <table class="server-table" id="serverTable">
-      <thead>
-        <tr>
-          <th data-sort="name" class="sortable">服务器</th>
-          <th data-sort="status" class="sortable">状态</th>
-          <th data-sort="cpu" class="sortable num">CPU</th>
-          <th data-sort="mem" class="sortable num">内存</th>
-          <th data-sort="disk" class="sortable num hide-md">磁盘</th>
-          <th data-sort="net" class="sortable num">网络 ↑</th>
-          <th class="num hide-md">网络 ↓</th>
-          <th class="num hide-md">负载</th>
-          <th data-sort="uptime" class="sortable num hide-md">运行时间</th>
-        </tr>
-      </thead>
-      <tbody id="serverTbody"></tbody>
-    </table>
-  </section>
+  <section id="serverList" class="server-list" aria-label="服务器列表"></section>
 
   <footer class="foot">
     <span>Muse · Aurora — 流动光晕与玻璃质感</span>
