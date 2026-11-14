@@ -31,9 +31,20 @@
 </header>
 
 <main class="wrap">
-  <section class="verdict" aria-label="系统状态">
+  <section class="status-line" aria-label="系统状态">
+    <span id="verdictDot" class="v-dot"></span>
     <h2 id="verdictLine">正在连接…</h2>
-    <p id="verdictSub">–</p>
+    <span id="verdictSub" class="v-sub">–</span>
+    <span class="v-clock" id="clock">--:--:--</span>
+  </section>
+
+  <section class="hero" aria-label="CPU 趋势">
+    <div class="hero-head">
+      <h3>CPU 趋势</h3>
+      <div class="hero-legend" id="heroLegend"></div>
+      <span class="hero-cap">实时 · 最近 10 分钟</span>
+    </div>
+    <canvas id="chartHero" width="1200" height="260"></canvas>
   </section>
 
   <div class="list-head">
@@ -52,7 +63,7 @@
   <p id="emptyHint" class="hint" hidden>没有匹配的服务器。</p>
   <p id="errorHint" class="hint error" hidden></p>
 
-  <section id="serverList" class="server-list" aria-label="服务器列表"></section>
+  <section id="serverGrid" class="server-grid" aria-label="服务器列表"></section>
 
   <footer class="foot">
     <span>Muse · Aurora — 流动光晕与玻璃质感</span>
