@@ -1,521 +1,402 @@
-/* Muse v6 — Aurora. Flowing light + glass.
- * The idea: the page is a dark room with slow aurora light in it.
- * Indigo / violet / teal fields drift behind frosted glass panels;
- * data stays calm and monochrome, the aurora is the atmosphere.
- * One gradient accent (indigo → violet → teal) for the hero number,
- * the hero chart, and active states. Structure follows v5
- * (Linear/Stripe/Vercel restraint: KPI strip, one hero chart, the
- * server table, progressive-disclosure drawer).
+/* Muse v7 — Aurora, rethought layout.
+ * The diagnosis that drove v7:
+ *   v1–v6 all kept the same skeleton (KPI strip + hero chart + table)
+ *   and only changed the skin. The skeleton was the problem.
+ *   - The KPI strip and the hero chart are fleet aggregates nobody
+ *     acts on. With a small fleet they repeat what the servers say.
+ *   - A table treats every server like a spreadsheet row: uniform,
+ *     no hierarchy, no identity. The thing that needs you (offline,
+ *     hot) looks the same as the thing that doesn't.
+ *   - The page answered "what are the numbers?" before it answered
+ *     "are we OK?".
+ * The new skeleton:
+ *   1. A verdict line — the 5-second answer, in one sentence.
+ *   2. The servers ARE the page. Each one is a full-width band with
+ *      its own sparkline and its key numbers — a list, not a table.
+ *      Offline sorts first and is visibly distinct.
+ *   3. Everything else (full chart, full info, 24h history) lives in
+ *      the detail drawer, on demand.
  * Data layer (unchanged): WS /api/v1/ws/server (live, no auth),
  * GET /api/v1/setting, GET /api/v1/server/:id/metrics (24h, tsdb only).
  * Net speeds are computed here from transfer deltas. Offline =
  * last_active older than 30s (or the zero time).
  */
 "use strict";
+const $ = (s, r) => (r || document).querySelector(s);
+const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+function cssVar(name, fallback) { const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim(); return v || fallback; }
 
-const $ = (s) => document.querySelector(s);
-const tbody = $("#serverTbody");
-const MAX_POINTS = 300;            // live ring buffer (~10 min @ 2s)
-const OFFLINE_AFTER_MS = 30_000;
+const MAXH = 300, OFFLINE_MS = 30000;
 
-/* ---------- state ---------- */
-const servers = new Map();         // id -> { raw, online, inSpeed, outSpeed, prevIn, prevOut, prevAt, hist, shownCpu }
-const fleetHist = [];              // [ts, avg cpu across online servers]
-let ws = null, wsTimer = null, reconnectDelay = 1000;
-let detailId = null, detailMetric = "cpu";
-let lastUpdateAt = 0;
-let sortKey = "status", sortDir = 1;   // default: offline first
+/* ---------------- theme ---------------- */
+function initTheme() {
+  const saved = localStorage.getItem("muse-theme");
+  if (saved === "light" || saved === "dark") document.documentElement.dataset.theme = saved;
+  else if (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches) document.documentElement.dataset.theme = "light";
+  else document.documentElement.dataset.theme = "dark";
+}
+$("#themeBtn").addEventListener("click", () => {
+  const cur = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+  document.documentElement.dataset.theme = cur;
+  localStorage.setItem("muse-theme", cur);
+});
+initTheme();
 
-/* ---------- helpers ---------- */
-function fmtBytes(b) {
-  if (!isFinite(b) || b == null) return "–";
-  if (b < 0) b = 0;
-  const u = ["B", "KB", "MB", "GB", "TB", "PB"];
+/* ---------------- state ---------------- */
+const servers = new Map(); // id -> {id, name, host, state, online, cpuHist[], memHist[], netUpHist[], netDownHist[], lastNetIn, lastNetOut, lastTs, netUp, netDown, updatedAt}
+let siteName = "";
+let lastMsgAt = 0;
+let searchQ = "";
+let sortKey = "status";
+let selectedId = null;
+let detailMetric = "cpu";
+let chartRaf = null;
+
+const flagCache = {};
+function countryFlag(code) {
+  if (!code) return "";
+  code = String(code).toLowerCase();
+  if (flagCache[code] !== undefined) return flagCache[code];
+  if (!/^[a-z]{2}$/.test(code)) { flagCache[code] = ""; return ""; }
+  const f = String.fromCodePoint(...[...code].map((c) => 0x1f1e6 + c.charCodeAt(0) - 97));
+  flagCache[code] = f;
+  return f;
+}
+function fmtBytes(n) {
+  if (n == null || !isFinite(n)) return "–";
+  const u = ["B", "KB", "MB", "GB", "TB"];
   let i = 0;
-  while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
-  return (b >= 100 ? Math.round(b) : b.toFixed(1)) + " " + u[i];
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return (n >= 100 ? n.toFixed(0) : n >= 10 ? n.toFixed(1) : n.toFixed(2)) + " " + u[i];
 }
-function fmtSpeed(bps) {
-  if (!isFinite(bps) || bps == null) return "–";
-  return fmtBytes(bps) + "/s";
-}
+function fmtSpeed(n) { return n == null ? "–" : fmtBytes(n) + "/s"; }
 function fmtUptime(sec) {
-  if (!isFinite(sec) || sec == null) return "–";
-  sec = Math.floor(sec);
-  const d = Math.floor(sec / 86400); sec %= 86400;
-  const h = Math.floor(sec / 3600); sec %= 3600;
-  const m = Math.floor(sec / 60);
+  if (sec == null || !isFinite(sec) || sec < 0) return "–";
+  const d = Math.floor(sec / 86400), h = Math.floor(sec % 86400 / 3600), m = Math.floor(sec % 3600 / 60);
   if (d > 0) return d + "天 " + h + "小时";
   if (h > 0) return h + "小时 " + m + "分";
-  return m + "分";
+  if (m > 0) return m + "分";
+  return Math.floor(sec) + "秒";
 }
-function fmtTimeAgo(iso) {
-  const t = Date.parse(iso);
-  if (!isFinite(t) || t <= 0) return "从未上线";
-  const s = Math.max(0, Math.floor((Date.now() - t) / 1000));
+function fmtAgo(ts) {
+  if (!ts) return "从未上线";
+  const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+  if (s < 5) return "刚刚";
   if (s < 60) return s + " 秒前";
   if (s < 3600) return Math.floor(s / 60) + " 分钟前";
-  if (s < 86400) return Math.floor(s / 3600) + " 小时前";
-  return Math.floor(s / 86400) + " 天前";
+  return Math.floor(s / 3600) + " 小时前";
 }
-function flagEmoji(cc) {
-  if (!cc || typeof cc !== "string" || cc.length !== 2) return "";
-  const up = cc.toUpperCase();
-  if (!/^[A-Z]{2}$/.test(up)) return "";
-  return String.fromCodePoint(...[...up].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65));
+function fmtClock(d) {
+  const p = (n) => String(n).padStart(2, "0");
+  return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
 }
-function esc(s) {
-  return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+function fmtDateTime(d) {
+  const p = (n) => String(n).padStart(2, "0");
+  return d.getFullYear() + "/" + p(d.getMonth() + 1) + "/" + p(d.getDate()) + " " + fmtClock(d);
 }
-function pct(used, total) {
-  if (!total || total <= 0 || used == null) return 0;
-  return Math.min(100, Math.max(0, (used / total) * 100));
+function pct(v) { return v == null || !isFinite(v) ? "–" : (v * 100).toFixed(1) + "%"; }
+function parseLastActive(v) {
+  if (!v) return 0;
+  const t = Date.parse(v);
+  if (!t || t < 1e12) return 0; // zero time 0001-01-01
+  return t;
 }
-function cssVar(name, fallback) {
-  const v = getComputedStyle(document.documentElement).getPropertyValue(name);
-  return (v && v.trim()) || fallback;
-}
-function barClass(p) { return p >= 90 ? "hot" : p >= 75 ? "warn" : ""; }
 
-/* ---------- theme ---------- */
-function applyTheme(t) {
-  document.documentElement.setAttribute("data-theme", t);
-  try { localStorage.setItem("muse-theme", t); } catch (e) {}
-}
-(function initTheme() {
-  let t = null;
-  try { t = localStorage.getItem("muse-theme"); } catch (e) {}
-  if (!t) t = window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
-  applyTheme(t);
-})();
-$("#themeBtn").addEventListener("click", () => {
-  const cur = document.documentElement.getAttribute("data-theme") || "dark";
-  applyTheme(cur === "dark" ? "light" : "dark");
-});
-
-/* ---------- site setting ---------- */
-fetch("./api/v1/setting").then((r) => r.json()).then((j) => {
-  const name = j && j.data && j.data.config && j.data.config.site_name;
-  if (name) $("#siteName").textContent = name;
-}).catch(() => {});
-
-/* ---------- search ---------- */
-$("#searchInput").addEventListener("input", renderAll);
-document.addEventListener("keydown", (e) => {
-  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-    e.preventDefault();
-    $("#searchInput").focus();
-  }
-  if (e.key === "Escape") closeDetail();
-});
-
-/* ---------- sortable headers (Stripe tables) ---------- */
-document.querySelectorAll("th.sortable").forEach((th) => {
-  th.addEventListener("click", () => {
-    const key = th.dataset.sort;
-    if (sortKey === key) sortDir = -sortDir;
-    else { sortKey = key; sortDir = key === "name" ? 1 : -1; }
-    document.querySelectorAll("th.sortable").forEach((t) => {
-      t.classList.remove("sorted");
-      const a = t.querySelector(".arrow");
-      if (a) a.remove();
-    });
-    th.classList.add("sorted");
-    const arrow = document.createElement("span");
-    arrow.className = "arrow";
-    arrow.textContent = sortDir === 1 ? "↑" : "↓";
-    th.appendChild(arrow);
-    renderAll();
-  });
-});
-
-/* ---------- websocket ---------- */
+/* ---------------- websocket ---------------- */
 function connectWS() {
-  setConn("连接中…", "");
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  const url = proto + "//" + location.host + "/api/v1/ws/server";
-  let sock;
-  try { sock = new WebSocket(url); } catch (e) { scheduleReconnect(); return; }
-  ws = sock;
-  sock.onopen = () => { reconnectDelay = 1000; setConn("实时连接", "ok"); };
-  sock.onmessage = (ev) => {
-    let d;
-    try { d = JSON.parse(ev.data); } catch (e) { return; }
-    if (d && Array.isArray(d.servers)) onServers(d.servers, d.now || Date.now());
+  const ws = new WebSocket(proto + "//" + location.host + "/api/v1/ws/server");
+  const dot = $("#connDot"), txt = $("#connText");
+  dot.classList.remove("ok", "bad"); txt.textContent = "连接中…";
+  ws.onopen = () => { dot.classList.add("ok"); txt.textContent = "实时连接"; };
+  ws.onclose = () => {
+    dot.classList.remove("ok"); dot.classList.add("bad"); txt.textContent = "已断开，正在重连…";
+    setTimeout(connectWS, 3000);
   };
-  sock.onclose = () => { setConn("连接断开", "bad"); scheduleReconnect(); };
-  sock.onerror = () => { try { sock.close(); } catch (e) {} };
-}
-function scheduleReconnect() {
-  clearTimeout(wsTimer);
-  wsTimer = setTimeout(connectWS, reconnectDelay);
-  reconnectDelay = Math.min(reconnectDelay * 2, 30000);
-}
-function setConn(text, cls) {
-  $("#connText").textContent = text;
-  $("#connDot").className = "conn" + (cls ? " " + cls : "");
+  ws.onerror = () => { try { ws.close(); } catch (e) { /* ignore */ } };
+  ws.onmessage = (ev) => {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch (e) { return; }
+    if (!msg || !Array.isArray(msg.servers)) return;
+    lastMsgAt = Date.now();
+    const now = msg.now || Date.now();
+    for (const s of msg.servers) {
+      const id = s.id;
+      let rec = servers.get(id);
+      if (!rec) {
+        rec = { id, cpuHist: [], memHist: [], netUpHist: [], netDownHist: [], lastNetIn: null, lastNetOut: null, lastTs: null, netUp: null, netDown: null };
+        servers.set(id, rec);
+      }
+      rec.name = s.name || ("服务器 " + id);
+      rec.host = s.host || {};
+      rec.state = s.state || {};
+      rec.countryCode = s.country_code || rec.host.country_code || "";
+      // last_active / country_code live at the SERVER level in the WS
+      // payload (host only carries platform/cpu/mem_total/disk_total/
+      // swap_total/arch/boot_time). Keep the host-level fallback.
+      const la = parseLastActive(s.last_active || rec.host.last_active);
+      rec.lastActive = la;
+      rec.online = la > 0 && (now - la) < OFFLINE_MS && Object.keys(rec.state).length > 0;
+      const st = rec.state;
+      const cpu = typeof st.cpu === "number" ? st.cpu / 100 : null;
+      // mem_total / disk_total / swap_total live in host, not state
+      const memTotal = rec.host.mem_total;
+      const mem = (typeof st.mem_used === "number" && typeof memTotal === "number" && memTotal > 0)
+        ? st.mem_used / memTotal : null;
+      if (rec.online) {
+        if (cpu != null) { rec.cpuHist.push([now, cpu]); if (rec.cpuHist.length > MAXH) rec.cpuHist.shift(); }
+        if (mem != null) { rec.memHist.push([now, mem]); if (rec.memHist.length > MAXH) rec.memHist.shift(); }
+        const ni = st.net_in_transfer, no = st.net_out_transfer;
+        if (typeof ni === "number" && typeof no === "number" && rec.lastNetIn != null && rec.lastTs != null) {
+          const dt = (now - rec.lastTs) / 1000;
+          if (dt > 0 && dt < 60) {
+            rec.netDown = Math.max(0, (ni - rec.lastNetIn) / dt);
+            rec.netUp = Math.max(0, (no - rec.lastNetOut) / dt);
+            rec.netDownHist.push([now, rec.netDown]); if (rec.netDownHist.length > MAXH) rec.netDownHist.shift();
+            rec.netUpHist.push([now, rec.netUp]); if (rec.netUpHist.length > MAXH) rec.netUpHist.shift();
+          }
+        }
+        rec.lastNetIn = ni; rec.lastNetOut = no; rec.lastTs = now;
+      }
+      rec.updatedAt = now;
+    }
+    render();
+    if (selectedId != null && $("#detail").classList.contains("open")) refreshDetail();
+  };
 }
 
-/* ---------- ingest ---------- */
-function onServers(list, nowMs) {
-  lastUpdateAt = nowMs;
-  const seen = new Set();
-  for (const raw of list) {
-    if (!raw || raw.id == null) continue;
-    seen.add(raw.id);
-    let s = servers.get(raw.id);
-    if (!s) {
-      s = { raw, online: false, inSpeed: 0, outSpeed: 0, prevIn: null, prevOut: null, prevAt: null,
-            hist: { cpu: [], mem: [], netIn: [], netOut: [] }, shownCpu: 0 };
-      servers.set(raw.id, s);
-    }
-    const st = raw.state || {};
-    if (s.prevIn != null && s.prevAt != null && nowMs > s.prevAt) {
-      const dt = (nowMs - s.prevAt) / 1000;
-      const dIn = (st.net_in_transfer ?? 0) - s.prevIn;
-      const dOut = (st.net_out_transfer ?? 0) - s.prevOut;
-      s.inSpeed = dIn >= 0 ? dIn / dt : 0;
-      s.outSpeed = dOut >= 0 ? dOut / dt : 0;
-    }
-    s.prevIn = st.net_in_transfer ?? 0;
-    s.prevOut = st.net_out_transfer ?? 0;
-    s.prevAt = nowMs;
-    s.raw = raw;
-    const la = Date.parse(raw.last_active);
-    const hasState = raw.state && Object.keys(raw.state).length > 0;
-    s.online = hasState && isFinite(la) && la > 0 && (nowMs - la) < OFFLINE_AFTER_MS;
-    if (s.online) {
-      const h = s.hist, t = nowMs;
-      const memPct = pct(st.mem_used, raw.host && raw.host.mem_total);
-      pushPoint(h.cpu, t, st.cpu ?? 0);
-      pushPoint(h.mem, t, memPct);
-      pushPoint(h.netIn, t, s.inSpeed);
-      pushPoint(h.netOut, t, s.outSpeed);
-    }
-  }
-  for (const id of [...servers.keys()]) if (!seen.has(id)) servers.delete(id);
-  // fleet-average CPU for the one hero chart
-  const online = [...servers.values()].filter((s) => s.online);
-  if (online.length) {
-    const avg = online.reduce((a, s) => a + (s.raw.state?.cpu ?? 0), 0) / online.length;
-    fleetHist.push([nowMs, avg]);
-    if (fleetHist.length > MAX_POINTS) fleetHist.splice(0, fleetHist.length - MAX_POINTS);
-  }
-  renderAll();
-  if (detailId != null) renderDetail();
-}
-function pushPoint(arr, t, v) {
-  arr.push([t, v]);
-  if (arr.length > MAX_POINTS) arr.splice(0, arr.length - MAX_POINTS);
-}
+/* ---------------- setting ---------------- */
+fetch("/api/v1/setting").then((r) => r.json()).then((d) => {
+  if (d && d.data && d.data.site_name) { siteName = d.data.site_name; $("#siteName").textContent = siteName; }
+}).catch(() => { /* keep default title */ });
 
-/* ---------- render : KPIs + hero chart + table ---------- */
-function visibleServers() {
-  const q = ($("#searchInput").value || "").trim().toLowerCase();
-  let arr = [...servers.values()];
-  if (q) arr = arr.filter((s) => (s.raw.name || "").toLowerCase().includes(q));
-  const key = sortKey, dir = sortDir;
-  const val = (s) => {
-    const st = s.raw.state || {}, host = s.raw.host || {};
-    switch (key) {
-      case "name": return String(s.raw.name || "");
-      case "status": return s.online ? 1 : 0;
-      case "cpu": return s.online ? (st.cpu ?? 0) : -1;
-      case "mem": return s.online ? pct(st.mem_used, host.mem_total) : -1;
-      case "disk": return s.online ? pct(st.disk_used, host.disk_total) : -1;
-      case "net": return s.online ? s.outSpeed + s.inSpeed : -1;
-      case "uptime": return s.online ? (st.uptime ?? 0) : -1;
-      default: return 0;
-    }
-  };
-  arr.sort((a, b) => {
-    const va = val(a), vb = val(b);
-    if (typeof va === "string") return dir * va.localeCompare(vb);
-    return dir * (va - vb);
-  });
-  return arr;
-}
-function renderAll() {
-  const all = [...servers.values()];
+/* ---------------- verdict ---------------- */
+function renderVerdict() {
+  const line = $("#verdictLine"), sub = $("#verdictSub");
+  const all = Array.from(servers.values());
+  if (all.length === 0) {
+    line.textContent = "正在连接…";
+    sub.textContent = "–";
+    return;
+  }
   const online = all.filter((s) => s.online);
   const offline = all.filter((s) => !s.online);
-  // page head
-  $("#pageSub").textContent = !all.length ? "正在连接…" :
-    offline.length ? `${all.length} 台服务器 · ${online.length} 台在线 · ${offline.length} 台离线` :
-    `${all.length} 台服务器 · 全部在线 · ${lastUpdateAt ? Math.max(0, Math.round((Date.now() - lastUpdateAt) / 1000)) + " 秒前更新" : ""}`;
-  // KPIs — one primary (online), rest quiet
-  const kOnline = $("#kpiOnline");
-  kOnline.textContent = all.length ? online.length + " / " + all.length : "–";
-  kOnline.className = offline.length ? "bd" : "gd";
-  $("#kpiOnlineSub").textContent = offline.length ? offline.map((s) => s.raw.name).join("、") + " 离线" : "全部在线";
-  const avgCpu = online.length ? online.reduce((a, s) => a + (s.raw.state?.cpu ?? 0), 0) / online.length : null;
-  const avgMem = online.length ? online.reduce((a, s) => a + pct(s.raw.state?.mem_used, s.raw.host?.mem_total), 0) / online.length : null;
-  const kCpu = $("#kpiCpu");
-  kCpu.textContent = avgCpu != null ? avgCpu.toFixed(1) + "%" : "–";
-  kCpu.className = avgCpu != null && avgCpu >= 90 ? "bd" : "";
-  const kMem = $("#kpiMem");
-  kMem.textContent = avgMem != null ? avgMem.toFixed(1) + "%" : "–";
-  kMem.className = avgMem != null && avgMem >= 90 ? "bd" : "";
-  const totNet = online.reduce((a, s) => a + s.inSpeed + s.outSpeed, 0);
-  const kNet = $("#kpiNet");
-  kNet.textContent = all.length ? fmtSpeed(totNet) : "–";
-  kNet.className = "ac";
-  const kAlerts = $("#kpiAlerts");
-  kAlerts.textContent = String(offline.length);
-  kAlerts.className = offline.length ? "bd" : "";
-  // hero chart (the one visualization)
-  $("#heroCpuNow").textContent = avgCpu != null ? avgCpu.toFixed(1) + "%" : "";
-  drawArea($("#chartFleet"), fleetHist, (v) => v.toFixed(0) + "%");
-  // table
-  const arr = visibleServers();
-  $("#emptyHint").hidden = arr.length !== 0;
-  const wanted = new Map(arr.map((s) => [s.raw.id, s]));
-  for (const el of [...tbody.querySelectorAll("tr")]) {
-    if (!wanted.has(Number(el.dataset.id))) el.remove();
-  }
-  arr.forEach((s) => {
-    let tr = tbody.querySelector(`tr[data-id="${s.raw.id}"]`);
-    if (!tr) {
-      tr = document.createElement("tr");
-      tr.dataset.id = s.raw.id;
-      tr.tabIndex = 0;
-      tr.innerHTML = `<td class="cell-server"><div class="cell-name"></div><div class="cell-sub"></div></td>
-        <td><span class="status-pill"><i></i><em></em></span></td>
-        <td class="num"><span class="cpu-cell"><b></b><canvas width="144" height="52"></canvas></span></td>
-        <td class="num mem-cell"></td>
-        <td class="num disk-cell hide-md"></td>
-        <td class="num net-up-cell"></td>
-        <td class="num net-down-cell hide-md"></td>
-        <td class="num load-cell hide-md"></td>
-        <td class="num uptime-cell hide-md"></td>`;
-      tr.addEventListener("click", () => openDetail(s.raw.id));
-      tr.addEventListener("keydown", (e) => { if (e.key === "Enter") openDetail(s.raw.id); });
-      tbody.appendChild(tr);
-    }
-    updateRow(tr, s);
-    // appendChild moves an existing row — this reorders the DOM to the sort
-    tbody.appendChild(tr);
+  const hot = online.filter((s) => {
+    const st = s.state || {};
+    const cpu = typeof st.cpu === "number" ? st.cpu : 0;
+    const mem = (typeof st.mem_used === "number" && typeof s.host.mem_total === "number" && s.host.mem_total > 0)
+      ? st.mem_used / s.host.mem_total * 100 : 0;
+    return cpu >= 80 || mem >= 90;
   });
+  if (offline.length > 0) {
+    const n = offline.length;
+    line.innerHTML = "<b class=\"bad\">" + n + " 台服务器离线</b>";
+  } else if (hot.length > 0) {
+    line.innerHTML = "<b>" + hot.length + " 台服务器负载较高</b>";
+  } else {
+    line.innerHTML = "<span class=\"ok\">一切正常</span>";
+  }
+  const parts = [all.length + " 台服务器", online.length + " 台在线"];
+  if (offline.length) parts.push(offline.length + " 台离线");
+  if (hot.length) parts.push(hot.length + " 台负载高");
+  sub.textContent = parts.join(" · ") + " · " + fmtClock(new Date());
+  $("#listCount").textContent = "服务器 · " + all.length + " 台";
 }
-function updateRow(tr, s) {
-  const raw = s.raw, host = raw.host || {}, st = raw.state || {};
-  tr.classList.toggle("offline", !s.online);
-  tr.querySelector(".cell-name").textContent = raw.name;
-  const flag = flagEmoji(raw.country_code);
-  tr.querySelector(".cell-sub").innerHTML = (flag ? `<span class="flag">${flag}</span>` : "") +
-    esc([host.platform, host.arch].filter(Boolean).join(" · ") || "–");
-  const pill = tr.querySelector(".status-pill");
-  pill.classList.toggle("off", !s.online);
-  pill.querySelector("em").textContent = s.online ? "在线" : "离线";
-  pill.querySelector("em").style.fontStyle = "normal";
-  // CPU: tweened number + inline sparkline (Stripe pattern)
-  const target = s.online ? (st.cpu ?? 0) : 0;
-  s.shownCpu += (target - s.shownCpu) * 0.25;
-  if (Math.abs(target - s.shownCpu) < 0.05) s.shownCpu = target;
-  const cpuB = tr.querySelector(".cpu-cell b");
-  cpuB.textContent = s.shownCpu.toFixed(1) + "%";
-  cpuB.className = s.online && target >= 90 ? "hot" : "";
-  drawSpark(tr.querySelector(".cpu-cell canvas"), s.hist.cpu, s.online);
-  const memP = pct(st.mem_used, host.mem_total);
-  const diskP = pct(st.disk_used, host.disk_total);
-  tr.querySelector(".mem-cell").innerHTML = s.online
-    ? `${memP.toFixed(1)}%<span class="mini-bar"><i class="${barClass(memP)}" style="width:${memP.toFixed(1)}%"></i></span>` : "–";
-  tr.querySelector(".disk-cell").innerHTML = s.online
-    ? `${diskP.toFixed(1)}%<span class="mini-bar"><i class="${barClass(diskP)}" style="width:${diskP.toFixed(1)}%"></i></span>` : "–";
-  tr.querySelector(".net-up-cell").textContent = s.online ? fmtSpeed(s.outSpeed) : "–";
-  tr.querySelector(".net-down-cell").textContent = s.online ? fmtSpeed(s.inSpeed) : "–";
-  tr.querySelector(".load-cell").textContent = s.online ? (st.load_1 ?? "–") : "–";
-  tr.querySelector(".uptime-cell").textContent = s.online ? fmtUptime(st.uptime) : fmtTimeAgo(raw.last_active);
-}
-// keep numbers easing between messages
-setInterval(() => { if (servers.size) renderAll(); }, 400);
 
-function drawSpark(canvas, pts, online) {
-  const { ctx, w, h } = setupCanvas(canvas);
-  const accent = cssVar("--accent", "#818cf8");
+/* ---------------- sorting ---------------- */
+function sortedServers() {
+  const all = Array.from(servers.values());
+  const q = searchQ.trim().toLowerCase();
+  const filtered = q ? all.filter((s) => (s.name || "").toLowerCase().includes(q) || JSON.stringify(s.host || {}).toLowerCase().includes(q)) : all;
+  const cpuOf = (s) => (s.online && typeof s.state.cpu === "number") ? s.state.cpu : -1;
+  const memOf = (s) => {
+    if (!s.online) return -1;
+    const st = s.state || {};
+    return (typeof st.mem_used === "number" && typeof s.host.mem_total === "number" && s.host.mem_total > 0) ? st.mem_used / s.host.mem_total : -1;
+  };
+  filtered.sort((a, b) => {
+    if (sortKey === "cpu") return cpuOf(b) - cpuOf(a);
+    if (sortKey === "mem") return memOf(b) - memOf(a);
+    if (sortKey === "name") return (a.name || "").localeCompare(b.name || "");
+    // status: offline first, then CPU desc
+    if (a.online !== b.online) return a.online ? 1 : -1;
+    return cpuOf(b) - cpuOf(a);
+  });
+  return filtered;
+}
+
+/* ---------------- bands ---------------- */
+function metricHTML(cls, label, valueHTML, extra) {
+  return "<div class=\"b-metric " + cls + "\"><label>" + label + "</label><b>" + valueHTML + "</b>" + (extra || "") + "</div>";
+}
+function bandHTML(s) {
+  const st = s.state || {};
+  const host = s.host || {};
+  const cpu = s.online && typeof st.cpu === "number" ? st.cpu : null;
+  const mem = (s.online && typeof st.mem_used === "number" && typeof host.mem_total === "number" && host.mem_total > 0)
+    ? st.mem_used / host.mem_total * 100 : null;
+  const disk = (s.online && typeof st.disk_used === "number" && typeof host.disk_total === "number" && host.disk_total > 0)
+    ? st.disk_used / host.disk_total * 100 : null;
+  const uptime = s.online && typeof st.uptime === "number" ? fmtUptime(st.uptime) : "–";
+  const subParts = [];
+  const flag = countryFlag(s.countryCode || host.country_code);
+  if (flag) subParts.push("<span class=\"flag\">" + flag + "</span>");
+  if (host.platform) subParts.push(esc(host.platform));
+  if (host.arch) subParts.push(esc(host.arch));
+  subParts.push(s.online ? "在线" : (s.lastActive ? "离线 · " + fmtAgo(s.lastActive) : "从未上线"));
+  const cpuCls = cpu != null && cpu >= 80 ? " class=\"hot\"" : "";
+  const memBar = mem != null
+    ? "<span class=\"mini-bar\"><i class=\"" + (mem >= 90 ? "hot" : mem >= 80 ? "warn" : "") + "\" style=\"width:" + clamp(mem, 0, 100).toFixed(1) + "%\"></i></span>" : "";
+  return "<div class=\"b-id\"><span class=\"b-dot\"></span><div style=\"min-width:0\"><div class=\"b-name\">" + esc(s.name) + "</div><div class=\"b-sub\">" + subParts.join(" · ") + "</div></div></div>"
+    + "<canvas class=\"b-spark\" width=\"300\" height=\"76\"></canvas>"
+    + metricHTML("m-cpu", "CPU", cpu != null ? "<span" + cpuCls + ">" + cpu.toFixed(1) + "%</span>" : "–")
+    + metricHTML("m-mem", "内存", mem != null ? mem.toFixed(1) + "%" : "–", memBar)
+    + metricHTML("m-disk hide-lg", "磁盘", disk != null ? disk.toFixed(1) + "%" : "–")
+    + metricHTML("m-up hide-md", "上传", s.online ? fmtSpeed(s.netUp) : "–")
+    + metricHTML("m-down hide-lg", "下载", s.online ? fmtSpeed(s.netDown) : "–")
+    + metricHTML("m-uptime hide-sm", "运行时间", uptime);
+}
+function renderBands() {
+  const list = $("#serverList");
+  const ordered = sortedServers();
+  $("#emptyHint").hidden = ordered.length !== 0 || servers.size === 0;
+  const seen = new Set();
+  for (const s of ordered) {
+    seen.add(s.id);
+    let el = list.querySelector("[data-id=\"" + s.id + "\"]");
+    if (!el) {
+      el = document.createElement("article");
+      el.className = "band";
+      el.dataset.id = s.id;
+      el.tabIndex = 0;
+      el.setAttribute("role", "button");
+      el.addEventListener("click", () => openDetail(s.id));
+      el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openDetail(s.id); } });
+      list.appendChild(el);
+    }
+    el.classList.toggle("offline", !s.online);
+    el.innerHTML = bandHTML(s);
+    const spark = el.querySelector(".b-spark");
+    if (spark) drawSpark(spark, s.cpuHist, s.online);
+  }
+  $$(".band", list).forEach((el) => { if (!seen.has(Number(el.dataset.id))) el.remove(); });
+  // order DOM to match sort
+  for (const s of ordered) {
+    const el = list.querySelector("[data-id=\"" + s.id + "\"]");
+    if (el) list.appendChild(el);
+  }
+}
+function render() {
+  renderVerdict();
+  renderBands();
+}
+
+/* ---------------- charts ---------------- */
+function setupCanvas(c) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = c.clientWidth, h = c.clientHeight;
+  if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) {
+    c.width = Math.round(w * dpr); c.height = Math.round(h * dpr);
+  }
+  const ctx = c.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
+  return { ctx, w, h };
+}
+function drawSpark(c, pts, online) {
+  const { ctx, w, h } = setupCanvas(c);
   if (!online || !pts || pts.length < 2) {
-    ctx.strokeStyle = cssVar("--text-3", "#6b7280");
-    ctx.setLineDash([3, 3]);
+    ctx.strokeStyle = cssVar("--text-3", "#71717a");
+    ctx.setLineDash([3, 4]); ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.moveTo(0, h / 2); ctx.lineTo(w, h / 2); ctx.stroke();
     ctx.setLineDash([]);
     return;
   }
-  const vals = pts.map((p) => p[1]);
-  const max = Math.max(...vals, 5);
-  const x = (i) => (i / (pts.length - 1)) * w;
-  const y = (v) => h - 2 - (v / max) * (h - 4);
+  const t0 = pts[0][0], t1 = pts[pts.length - 1][0] || t0 + 1;
+  const x = (t) => ((t - t0) / Math.max(1, t1 - t0)) * w;
+  const y = (v) => h - 3 - clamp(v, 0, 1) * (h - 6);
+  const grad = ctx.createLinearGradient(0, 0, 0, h);
+  const a1 = cssVar("--accent", "#818cf8"), a2 = cssVar("--accent-2", "#c084fc");
+  grad.addColorStop(0, a1 + "30"); grad.addColorStop(1, a2 + "00");
   ctx.beginPath();
-  pts.forEach((p, i) => { i === 0 ? ctx.moveTo(x(i), y(p[1])) : ctx.lineTo(x(i), y(p[1])); });
-  ctx.strokeStyle = accent; ctx.lineWidth = 1.75; ctx.lineJoin = "round"; ctx.lineCap = "round";
+  pts.forEach((p, i) => { i === 0 ? ctx.moveTo(x(p[0]), y(p[1])) : ctx.lineTo(x(p[0]), y(p[1])); });
+  ctx.lineTo(x(pts[pts.length - 1][0]), h); ctx.lineTo(x(pts[0][0]), h); ctx.closePath();
+  ctx.fillStyle = grad; ctx.fill();
+  ctx.beginPath();
+  pts.forEach((p, i) => { i === 0 ? ctx.moveTo(x(p[0]), y(p[1])) : ctx.lineTo(x(p[0]), y(p[1])); });
+  ctx.strokeStyle = a1; ctx.lineWidth = 1.8; ctx.lineJoin = "round"; ctx.lineCap = "round";
   ctx.stroke();
 }
-
-/* ---------- detail drawer : progressive disclosure ---------- */
-function openDetail(id) {
-  const s = servers.get(id);
-  if (!s) return;
-  detailId = id;
-  $("#detail").classList.add("open");
-  $("#detail").setAttribute("aria-hidden", "false");
-  $("#detailBackdrop").hidden = false;
-  renderDetail();
-  loadHistory(id);
-}
-function closeDetail() {
-  detailId = null;
-  $("#detail").classList.remove("open");
-  $("#detail").setAttribute("aria-hidden", "true");
-  $("#detailBackdrop").hidden = true;
-}
-$("#detailClose").addEventListener("click", closeDetail);
-$("#detailBackdrop").addEventListener("click", closeDetail);
-document.querySelectorAll("#metricSeg button").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    document.querySelectorAll("#metricSeg button").forEach((b) => b.classList.remove("active"));
-    btn.classList.add("active");
-    detailMetric = btn.dataset.metric;
-    renderDetail();
-  });
-});
-
-function renderDetail() {
-  const s = servers.get(detailId);
-  if (!s) { closeDetail(); return; }
-  const raw = s.raw, host = raw.host || {}, st = raw.state || {};
-  $("#dEyebrow").textContent = "服务器 · ID " + raw.id;
-  $("#dName").textContent = raw.name;
-  $("#dSub").textContent = (host.platform || "–") + (host.arch ? " · " + host.arch : "") +
-    (host.cpu && host.cpu[0] ? " · " + host.cpu[0] : "") +
-    " · " + (s.online ? "在线" : "离线 · 最后活跃 " + fmtTimeAgo(raw.last_active));
-  const memP = pct(st.mem_used, host.mem_total);
-  $("#dCpuBig").textContent = s.online && st.cpu != null ? st.cpu.toFixed(1) + "%" : "–";
-  $("#dMemBig").textContent = s.online ? memP.toFixed(1) + "%" : "–";
-  $("#dNetUpBig").textContent = s.online ? fmtSpeed(s.outSpeed) : "–";
-  $("#dNetDownBig").textContent = s.online ? fmtSpeed(s.inSpeed) : "–";
-  if (detailMetric === "cpu") drawArea($("#chartMain"), s.hist.cpu, (v) => v.toFixed(0) + "%");
-  else if (detailMetric === "mem") drawArea($("#chartMain"), s.hist.mem, (v) => v.toFixed(0) + "%");
-  else drawDualArea($("#chartMain"), s.hist.netIn, s.hist.netOut);
-  $("#chartCap").textContent = s.online ? "实时曲线 · 最近 10 分钟" : "离线 · 曲线已停止";
-  const diskP = pct(st.disk_used, host.disk_total);
-  const swapP = pct(st.swap_used, host.swap_total);
-  const cells = [
-    ["内存", fmtBytes(st.mem_used) + " / " + fmtBytes(host.mem_total) + (memP ? "（" + memP.toFixed(1) + "%）" : "")],
-    ["交换", fmtBytes(st.swap_used) + " / " + fmtBytes(host.swap_total) + (swapP ? "（" + swapP.toFixed(1) + "%）" : "")],
-    ["磁盘", fmtBytes(st.disk_used) + " / " + fmtBytes(host.disk_total) + (diskP ? "（" + diskP.toFixed(1) + "%）" : "")],
-    ["上传", fmtSpeed(s.outSpeed) + " · 累计 " + fmtBytes(st.net_out_transfer)],
-    ["下载", fmtSpeed(s.inSpeed) + " · 累计 " + fmtBytes(st.net_in_transfer)],
-    ["负载 1 / 5 / 15", [st.load_1, st.load_5, st.load_15].map((v) => v ?? "–").join(" / ")],
-    ["运行时间", fmtUptime(st.uptime)],
-    ["进程", st.process_count ?? "–"],
-    ["TCP / UDP 连接", (st.tcp_conn_count ?? "–") + " / " + (st.udp_conn_count ?? "–")],
-    ["启动时间", host.boot_time ? new Date(host.boot_time * 1000).toLocaleString("zh-CN") : "–"],
-    ["国家", raw.country_code ? raw.country_code.toUpperCase() : "–"],
-  ];
-  $("#dInfo").innerHTML = cells.map(([k, v]) => `<div class="d-row"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join("");
-}
-
-function loadHistory(id) {
-  $("#dHistNote").textContent = "加载中…";
-  $("#dHistEmpty").hidden = true;
-  fetch("./api/v1/server/" + id + "/metrics?metric=cpu&period=1d")
-    .then((r) => r.json())
-    .then((j) => {
-      if (detailId !== id) return;
-      const pts = (j && j.data && j.data.data_points) || [];
-      if (!pts.length) {
-        $("#dHistNote").textContent = "";
-        $("#dHistEmpty").hidden = false;
-        const c = $("#chartHist"), ctx = c.getContext("2d");
-        ctx.clearRect(0, 0, c.width, c.height);
-        return;
-      }
-      $("#dHistNote").textContent = pts.length + " 个采样点";
-      drawArea($("#chartHist"), pts.map((p) => [p.ts, p.value]), (v) => v.toFixed(0) + "%");
-    })
-    .catch(() => {
-      if (detailId !== id) return;
-      $("#dHistNote").textContent = "";
-      $("#dHistEmpty").hidden = false;
-    });
-}
-
-/* ---------- charts : one accent, soft area, muted grid ---------- */
-function setupCanvas(c) {
-  const dpr = window.devicePixelRatio || 1;
-  const w = c.clientWidth || 600, h = c.clientHeight || 180;
-  if (c.width !== Math.round(w * dpr)) { c.width = Math.round(w * dpr); c.height = Math.round(h * dpr); }
-  const ctx = c.getContext("2d");
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  return { ctx, w, h };
-}
-function drawArea(c, pts, fmtVal) {
+function drawArea(c, pts, unit) {
   const { ctx, w, h } = setupCanvas(c);
   const accent = cssVar("--accent", "#818cf8");
-  const gray = cssVar("--text-3", "#6b7280");
-  ctx.clearRect(0, 0, w, h);
-  if (!pts || pts.length < 2) {
-    ctx.fillStyle = gray; ctx.font = "12px sans-serif";
-    ctx.fillText(pts && pts.length === 1 ? "采集中…" : "暂无数据", 6, 20);
-    return;
-  }
-  const vals = pts.map((p) => p[1]);
-  let max = Math.max(...vals, 1), min = Math.min(...vals, 0);
-  if (max - min < 1e-9) max = min + 1;
-  const pad = (max - min) * 0.12; max += pad; min = Math.max(0, min - pad);
-  const x = (i) => (i / (pts.length - 1)) * (w - 4) + 2;
-  const y = (v) => h - 20 - ((v - min) / (max - min)) * (h - 32);
+  const gray = cssVar("--text-3", "#71717a");
   ctx.font = "11px sans-serif";
-  ctx.strokeStyle = cssVar("--line", "rgba(128,128,128,.14)");
-  [0, 1].forEach((f) => {
-    const yy = h - 20 - f * (h - 32);
-    ctx.beginPath(); ctx.moveTo(2, yy); ctx.lineTo(w - 2, yy); ctx.stroke();
-    ctx.fillStyle = gray;
-    ctx.fillText(fmtVal(min + f * (max - min)), 4, yy - 4);
-  });
-  const grad = ctx.createLinearGradient(0, 0, 0, h);
-  const a1 = cssVar("--accent", "#818cf8"), a2 = cssVar("--accent-2", "#c084fc"), a3 = cssVar("--accent-3", "#2dd4bf");
-  grad.addColorStop(0, a1 + "38"); grad.addColorStop(.55, a2 + "16"); grad.addColorStop(1, a3 + "00");
-  ctx.beginPath();
-  pts.forEach((p, i) => { i === 0 ? ctx.moveTo(x(i), y(p[1])) : ctx.lineTo(x(i), y(p[1])); });
-  ctx.strokeStyle = accent; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.lineCap = "round";
-  ctx.stroke();
-  ctx.lineTo(x(pts.length - 1), h - 20); ctx.lineTo(x(0), h - 20); ctx.closePath();
-  ctx.fillStyle = grad; ctx.fill();
   ctx.fillStyle = gray;
-  ctx.fillText(new Date(pts[0][0]).toLocaleTimeString("zh-CN", { hour12: false }), 2, h - 5);
-  ctx.fillText(new Date(pts[pts.length - 1][0]).toLocaleTimeString("zh-CN", { hour12: false }), w - 52, h - 5);
+  let max = 0;
+  for (const p of pts) max = Math.max(max, p[1]);
+  max = max > 0 ? max * 1.15 : 1;
+  const t0 = pts.length ? pts[0][0] : 0, t1 = pts.length ? pts[pts.length - 1][0] : 1;
+  const x = (t) => 34 + ((t - t0) / Math.max(1, t1 - t0)) * (w - 40);
+  const y = (v) => (h - 22) - (v / max) * (h - 34);
+  ctx.strokeStyle = cssVar("--line", "rgba(255,255,255,.09)");
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 2; i++) {
+    const yy = y(max * i / 2);
+    ctx.beginPath(); ctx.moveTo(34, yy); ctx.lineTo(w - 6, yy); ctx.stroke();
+    ctx.fillText(unit === "pct" ? Math.round(max * i / 2 * 100) + "%" : fmtBytes(max * i / 2), 0, yy + 4);
+  }
+  if (pts.length >= 2) {
+    const grad = ctx.createLinearGradient(0, 0, 0, h);
+    const a1 = cssVar("--accent", "#818cf8"), a2 = cssVar("--accent-2", "#c084fc"), a3 = cssVar("--accent-3", "#2dd4bf");
+    grad.addColorStop(0, a1 + "38"); grad.addColorStop(.55, a2 + "16"); grad.addColorStop(1, a3 + "00");
+    ctx.beginPath();
+    pts.forEach((p, i) => { i === 0 ? ctx.moveTo(x(p[0]), y(p[1])) : ctx.lineTo(x(p[0]), y(p[1])); });
+    ctx.lineTo(x(pts[pts.length - 1][0]), h - 22); ctx.lineTo(x(pts[0][0]), h - 22); ctx.closePath();
+    ctx.fillStyle = grad; ctx.fill();
+    ctx.beginPath();
+    pts.forEach((p, i) => { i === 0 ? ctx.moveTo(x(p[0]), y(p[1])) : ctx.lineTo(x(p[0]), y(p[1])); });
+    ctx.strokeStyle = accent; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.lineCap = "round";
+    ctx.stroke();
+    const d0 = new Date(t0), d1 = new Date(t1);
+    ctx.fillStyle = gray;
+    ctx.fillText(fmtClock(d0), 34, h - 6);
+    const t1s = fmtClock(d1);
+    ctx.fillText(t1s, w - 6 - ctx.measureText(t1s).width, h - 6);
+  }
 }
 function drawDualArea(c, downPts, upPts) {
   const { ctx, w, h } = setupCanvas(c);
   const accent = cssVar("--accent", "#818cf8");
   const teal = cssVar("--accent-3", "#2dd4bf");
   const gray = cssVar("--text-3", "#71717a");
-  ctx.clearRect(0, 0, w, h);
-  const all = [...downPts.map((p) => p[1]), ...upPts.map((p) => p[1])];
-  if (!all.length || (downPts.length < 2 && upPts.length < 2)) {
-    ctx.fillStyle = gray; ctx.font = "12px sans-serif";
-    ctx.fillText("采集中…", 6, 20);
-    return;
+  let max = 0;
+  for (const p of downPts) max = Math.max(max, p[1]);
+  for (const p of upPts) max = Math.max(max, p[1]);
+  max = max > 0 ? max * 1.15 : 1;
+  const all = downPts.concat(upPts);
+  const t0 = all.length ? Math.min(...all.map((p) => p[0])) : 0;
+  const t1 = all.length ? Math.max(...all.map((p) => p[0])) : 1;
+  const x = (t) => 34 + ((t - t0) / Math.max(1, t1 - t0)) * (w - 40);
+  const y = (v) => (h - 22) - (v / max) * (h - 34);
+  ctx.font = "11px sans-serif";
+  ctx.fillStyle = gray;
+  ctx.strokeStyle = cssVar("--line", "rgba(255,255,255,.09)");
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 2; i++) {
+    const yy = y(max * i / 2);
+    ctx.beginPath(); ctx.moveTo(34, yy); ctx.lineTo(w - 6, yy); ctx.stroke();
+    ctx.fillText(fmtBytes(max * i / 2), 0, yy + 4);
   }
-  const max = Math.max(...all, 1);
-  const x = (i, n) => (i / (n - 1)) * (w - 4) + 2;
-  const y = (v) => h - 20 - (v / max) * (h - 32);
-  const line = (pts, color) => {
+  function line(pts, color) {
     if (pts.length < 2) return;
     ctx.beginPath();
-    pts.forEach((p, i) => { i === 0 ? ctx.moveTo(x(i, pts.length), y(p[1])) : ctx.lineTo(x(i, pts.length), y(p[1])); });
+    pts.forEach((p, i) => { i === 0 ? ctx.moveTo(x(p[0]), y(p[1])) : ctx.lineTo(x(p[0]), y(p[1])); });
     ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.lineCap = "round";
     ctx.stroke();
-  };
-  ctx.font = "11px sans-serif";
-  ctx.strokeStyle = cssVar("--line", "rgba(128,128,128,.14)");
-  [0, 1].forEach((f) => {
-    const yy = h - 20 - f * (h - 32);
-    ctx.beginPath(); ctx.moveTo(2, yy); ctx.lineTo(w - 2, yy); ctx.stroke();
-    ctx.fillStyle = gray;
-    ctx.fillText(fmtSpeed(max * f), 4, yy - 4);
-  });
+  }
   line(downPts, accent);
   line(upPts, teal);
   ctx.font = "11px sans-serif";
@@ -523,13 +404,117 @@ function drawDualArea(c, downPts, upPts) {
   ctx.fillStyle = teal; ctx.fillText("— 上传", w - 44, 12);
 }
 
-/* ---------- clocks ---------- */
-function tickClock() {
-  const t = new Date().toLocaleTimeString("zh-CN", { hour12: false });
-  $("#clock").textContent = t;
-  $("#footClock").textContent = new Date().toLocaleString("zh-CN", { hour12: false });
+/* ---------------- detail drawer ---------------- */
+function openDetail(id) {
+  selectedId = id;
+  const s = servers.get(id);
+  if (!s) return;
+  $("#detail").classList.add("open");
+  $("#detail").setAttribute("aria-hidden", "false");
+  $("#detailBackdrop").hidden = false;
+  refreshDetail();
+  loadHistory(id);
 }
-setInterval(tickClock, 1000); tickClock();
+function closeDetail() {
+  selectedId = null;
+  $("#detail").classList.remove("open");
+  $("#detail").setAttribute("aria-hidden", "true");
+  $("#detailBackdrop").hidden = true;
+  if (chartRaf) { cancelAnimationFrame(chartRaf); chartRaf = null; }
+}
+$("#detailClose").addEventListener("click", closeDetail);
+$("#detailBackdrop").addEventListener("click", closeDetail);
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && selectedId != null) closeDetail();
+});
+$$("#metricSeg button").forEach((b) => {
+  b.addEventListener("click", () => {
+    $$("#metricSeg button").forEach((x) => x.classList.remove("active"));
+    b.classList.add("active");
+    detailMetric = b.dataset.metric;
+    refreshDetail();
+  });
+});
+function refreshDetail() {
+  const s = servers.get(selectedId);
+  if (!s) return;
+  const st = s.state || {};
+  const host = s.host || {};
+  $("#dEyebrow").textContent = "服务器 · ID " + s.id;
+  $("#dName").textContent = s.name;
+  const subParts = [];
+  if (host.platform) subParts.push(host.platform);
+  if (host.arch) subParts.push(host.arch);
+  const cpuInfo = host.cpu_info || (Array.isArray(host.cpu) ? host.cpu.join(", ") : host.cpu);
+  if (cpuInfo) subParts.push(cpuInfo);
+  subParts.push(s.online ? "在线" : (s.lastActive ? "离线 · " + fmtAgo(s.lastActive) : "从未上线"));
+  $("#dSub").textContent = subParts.join(" · ");
+  $("#dCpuBig").textContent = s.online && typeof st.cpu === "number" ? st.cpu.toFixed(1) + "%" : "–";
+  $("#dMemBig").textContent = (s.online && typeof st.mem_used === "number" && typeof host.mem_total === "number")
+    ? (st.mem_used / host.mem_total * 100).toFixed(1) + "%" : "–";
+  $("#dNetUpBig").textContent = s.online ? fmtSpeed(s.netUp) : "–";
+  $("#dNetDownBig").textContent = s.online ? fmtSpeed(s.netDown) : "–";
+  const rows = [];
+  const memPct = (typeof st.mem_used === "number" && typeof host.mem_total === "number" && host.mem_total > 0)
+    ? (st.mem_used / host.mem_total * 100).toFixed(1) + "%" : null;
+  rows.push(["内存", memPct != null ? fmtBytes(st.mem_used) + " / " + fmtBytes(host.mem_total) + "（" + memPct + "）" : "–"]);
+  rows.push(["交换", (typeof st.swap_used === "number" && typeof host.swap_total === "number")
+    ? fmtBytes(st.swap_used) + " / " + fmtBytes(host.swap_total) + "（" + (host.swap_total > 0 ? (st.swap_used / host.swap_total * 100).toFixed(1) : "0") + "%）" : "–"]);
+  const diskPct = (typeof st.disk_used === "number" && typeof host.disk_total === "number" && host.disk_total > 0)
+    ? (st.disk_used / host.disk_total * 100).toFixed(1) + "%" : null;
+  rows.push(["磁盘", diskPct != null ? fmtBytes(st.disk_used) + " / " + fmtBytes(host.disk_total) + "（" + diskPct + "）" : "–"]);
+  rows.push(["上传", s.online ? fmtSpeed(s.netUp) + " · 累计 " + fmtBytes(st.net_out_transfer) : "–"]);
+  rows.push(["下载", s.online ? fmtSpeed(s.netDown) + " · 累计 " + fmtBytes(st.net_in_transfer) : "–"]);
+  rows.push(["负载 1 / 5 / 15", (typeof st.load_1 === "number" && typeof st.load_5 === "number" && typeof st.load_15 === "number")
+    ? st.load_1.toFixed(2) + " / " + st.load_5.toFixed(2) + " / " + st.load_15.toFixed(2) : "–"]);
+  rows.push(["运行时间", s.online && typeof st.uptime === "number" ? fmtUptime(st.uptime) : "–"]);
+  rows.push(["进程", typeof st.process_count === "number" ? String(st.process_count) : "–"]);
+  rows.push(["TCP / UDP 连接", (typeof st.tcp_conn_count === "number" ? st.tcp_conn_count : "–") + " / " + (typeof st.udp_conn_count === "number" ? st.udp_conn_count : "–")]);
+  if (host.version) rows.push(["Agent 版本", esc(host.version)]);
+  if (host.boot_time) rows.push(["启动时间", fmtDateTime(new Date(host.boot_time * 1000))]);
+  $("#dInfo").innerHTML = rows.map((r) => "<div class=\"d-row\"><span>" + r[0] + "</span><b>" + r[1] + "</b></div>").join("");
+  const cap = $("#chartCap");
+  if (detailMetric === "cpu") { drawArea($("#chartMain"), s.cpuHist, "pct"); cap.textContent = "实时曲线 · 最近 10 分钟 · CPU 使用率"; }
+  else if (detailMetric === "mem") { drawArea($("#chartMain"), s.memHist, "pct"); cap.textContent = "实时曲线 · 最近 10 分钟 · 内存占用率"; }
+  else { drawDualArea($("#chartMain"), s.netDownHist, s.netUpHist); cap.textContent = "实时曲线 · 最近 10 分钟 · 网络速率"; }
+}
+async function loadHistory(id) {
+  const note = $("#dHistNote"), empty = $("#dHistEmpty");
+  empty.hidden = true;
+  try {
+    const r = await fetch("/api/v1/server/" + id + "/metrics?metric=&period=1d");
+    const d = await r.json();
+    const pts = (d && d.data && Array.isArray(d.data.data_points)) ? d.data.data_points : [];
+    if (!pts.length) {
+      empty.hidden = false;
+      note.textContent = "";
+      const { ctx, w, h } = setupCanvas($("#chartHist"));
+      ctx.clearRect(0, 0, w, h);
+      return;
+    }
+    note.textContent = "· " + pts.length + " 个点";
+    const series = pts.map((p) => [p.timestamp * 1000, (p.cpu || 0) / 100]);
+    drawArea($("#chartHist"), series, "pct");
+  } catch (e) {
+    empty.hidden = false;
+    note.textContent = "";
+  }
+}
 
-/* ---------- boot ---------- */
+/* ---------------- search / sort / clock ---------------- */
+$("#searchInput").addEventListener("input", (e) => { searchQ = e.target.value; renderBands(); });
+$("#sortSelect").addEventListener("change", (e) => { sortKey = e.target.value; renderBands(); });
+document.addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+    e.preventDefault();
+    $("#searchInput").focus();
+  }
+});
+setInterval(() => {
+  const now = new Date();
+  $("#footClock").textContent = fmtDateTime(now);
+  if (servers.size) renderVerdict();
+}, 1000);
+$("#footClock").textContent = fmtDateTime(new Date());
+
 connectWS();
