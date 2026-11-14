@@ -4,6 +4,12 @@ A brand-new, dependency-free user frontend for Nezha Dashboard v2.
 Pure static SPA (one `index.html` + CSS + JS), no build step, no CDN,
 no framework. Drop it in and it works.
 
+**Design:** Apple-inspired — minimal, premium, tech. Frosted-glass top bar
+and detail panel, hairline dividers, large light typography, generous
+whitespace. Light mode on `#f5f5f7` with white cards; dark mode on pure
+black with `#1c1c1e` cards. Accent is Apple blue (`#0071e3` / `#0a84ff`).
+Controls are native-feeling: pill search, segmented sort, toggle switch.
+
 ## What it does
 
 - **Live server list** over the panel's public WebSocket (`/api/v1/ws/server`,
